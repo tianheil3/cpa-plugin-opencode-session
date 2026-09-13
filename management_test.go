@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,8 +40,13 @@ func TestManagementRegisterABIOmitsHandler(t *testing.T) {
 }
 
 func TestHandleManagementResourceHTML(t *testing.T) {
-	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("port: 18317\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	p := &sessionPlugin{cfg: defaultConfig()}
+	p.cfg.CPAConfigPath = path
 	resp, err := p.HandleManagement(context.Background(), pluginapi.ManagementRequest{
 		Method: http.MethodGet,
 		Path:   "/v0/resource/plugins/opencode-session/status",
@@ -51,6 +57,15 @@ func TestHandleManagementResourceHTML(t *testing.T) {
 	body := string(resp.Body)
 	if !strings.Contains(body, "快捷接入") || !strings.Contains(body, "OpenCode Go") {
 		t.Fatalf("html = %s", body)
+	}
+	if !strings.Contains(body, `window.__OPENCODE_STATUS__ = {`) {
+		t.Fatal("expected embedded status JSON")
+	}
+	if !strings.Contains(body, `"ok":true`) {
+		t.Fatalf("embedded status = %s", body)
+	}
+	if !strings.Contains(body, "typeof o==='string'") {
+		t.Fatal("page JS must unwrap JSON-string management keys")
 	}
 }
 
@@ -67,6 +82,47 @@ func TestHandleConnectRequiresAPIKey(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", resp.StatusCode, resp.Body)
+	}
+}
+
+func TestHandleConnectWritesProvider(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer sk-live-test" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			_, _ = w.Write([]byte(`{"data":[{"id":"minimax-m3"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/usage"):
+			_, _ = w.Write([]byte(`{"usage":{"rolling":{"status":"ok","percent":11,"resetsAt":"t1"},"weekly":{"status":"ok","percent":22,"resetsAt":"t2"},"monthly":{"status":"ok","percent":33,"resetsAt":"t3"}}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("port: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &sessionPlugin{cfg: defaultConfig()}
+	p.cfg.CPAConfigPath = path
+	p.cfg.BaseURL = srv.URL + "/v1"
+	resp, err := p.handleConnect(context.Background(), []byte(`{"api_key":"sk-live-test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.StatusCode, resp.Body)
+	}
+	keys, models, err := listConfiguredKeys(path, "opencode-go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0] != "sk-live-test" || len(models) != 1 {
+		t.Fatalf("keys=%#v models=%#v", keys, models)
 	}
 }
 

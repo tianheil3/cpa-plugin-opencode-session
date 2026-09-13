@@ -33,7 +33,7 @@ func (p *sessionPlugin) HandleManagement(ctx context.Context, req pluginapi.Mana
 	path := strings.ToLower(req.Path)
 	switch {
 	case req.Method == http.MethodGet && strings.HasSuffix(path, "/status") && strings.Contains(path, "/resource/"):
-		return htmlResponse(dashboardHTML), nil
+		return htmlResponse(p.dashboardPage(ctx)), nil
 	case req.Method == http.MethodGet && strings.HasSuffix(path, "/plugins/opencode-session/status"):
 		return p.handleStatus(ctx)
 	case req.Method == http.MethodPost && strings.HasSuffix(path, "/plugins/opencode-session/connect"):
@@ -44,10 +44,26 @@ func (p *sessionPlugin) HandleManagement(ctx context.Context, req pluginapi.Mana
 		return p.handleStatus(ctx)
 	default:
 		if req.Method == http.MethodGet && (strings.HasSuffix(path, "/status") || strings.HasSuffix(path, "/")) {
-			return htmlResponse(dashboardHTML), nil
+			return htmlResponse(p.dashboardPage(ctx)), nil
 		}
 		return jsonResponse(http.StatusNotFound, map[string]any{"error": "unknown route"}), nil
 	}
+}
+
+func (p *sessionPlugin) dashboardPage(ctx context.Context) string {
+	payload, err := p.statusPayload(ctx)
+	if err != nil {
+		payload = map[string]any{
+			"ok":      false,
+			"error":   err.Error(),
+			"version": pluginVersion,
+		}
+	}
+	raw, errMarshal := json.Marshal(payload)
+	if errMarshal != nil {
+		raw = []byte("null")
+	}
+	return strings.Replace(dashboardHTML, "window.__OPENCODE_STATUS__ = null;", "window.__OPENCODE_STATUS__ = "+string(raw)+";", 1)
 }
 
 type connectRequest struct {
@@ -109,10 +125,18 @@ func (p *sessionPlugin) handleSyncModels(ctx context.Context, body []byte) (plug
 }
 
 func (p *sessionPlugin) handleStatus(ctx context.Context) (pluginapi.ManagementResponse, error) {
+	payload, err := p.statusPayload(ctx)
+	if err != nil {
+		return jsonResponse(http.StatusInternalServerError, map[string]any{"error": err.Error()}), nil
+	}
+	return jsonResponse(http.StatusOK, payload), nil
+}
+
+func (p *sessionPlugin) statusPayload(ctx context.Context) (map[string]any, error) {
 	path := resolveConfigPath(p.cfg.CPAConfigPath)
 	keys, models, err := listConfiguredKeys(path, p.cfg.providerName())
 	if err != nil {
-		return jsonResponse(http.StatusInternalServerError, map[string]any{"error": err.Error()}), nil
+		return nil, err
 	}
 	accounts := make([]map[string]any, 0, len(keys))
 	for _, key := range keys {
@@ -129,7 +153,7 @@ func (p *sessionPlugin) handleStatus(ctx context.Context) (pluginapi.ManagementR
 	p.mu.Lock()
 	failure := p.lastFailure
 	p.mu.Unlock()
-	return jsonResponse(http.StatusOK, map[string]any{
+	return map[string]any{
 		"ok":         true,
 		"provider":   p.cfg.providerName(),
 		"base_url":   p.cfg.zenBaseURL(),
@@ -140,7 +164,7 @@ func (p *sessionPlugin) handleStatus(ctx context.Context) (pluginapi.ManagementR
 		"version":    pluginVersion,
 		"failure":    failure,
 		"fetchedAt":  time.Now().UTC().Format(time.RFC3339),
-	}), nil
+	}, nil
 }
 
 func htmlResponse(body string) pluginapi.ManagementResponse {

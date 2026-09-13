@@ -82,7 +82,7 @@ Requires Go 1.26+ and CGO.
 
 ```bash
 make test
-make build VERSION=0.2.0
+make build VERSION=0.2.1
 ```
 
 ## License
