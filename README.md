@@ -13,7 +13,20 @@ CLIProxyAPI plugin for **OpenCode Go**: one-click connect, quota windows, and th
 ## What you get
 
 1. **快捷接入** — paste a Go API key on the plugin page. It probes `GET /zen/go/v1/models` and `GET /zen/go/v1/usage`, then writes an `openai-compatibility` provider named `opencode-go` (models, `disable-cooling`, `request-retry`, `x-opencode-session: $x-opencode-session`, `proxy-url: direct`). Optional Claude-compatible channel at `https://opencode.ai/zen/go`.
-2. **限额管理** — rolling 5h / weekly / monthly used-percent from the official usage API. Exposed on the plugin page and as a CPA `QuotaProvider` (`opencode-go`).
+2. **限额管理** — rolling 5h / weekly / monthly remaining quota from the official usage API. Shown as the same card style as Codex/Claude. `QuotaProvider` identifier is `opencode-go`; CPA runtime credentials are `openai-compatible-opencode-go`. On CPA 7.2.x the bundled Management Center quota page is hardcoded to five OAuth providers. To show OpenCode Go on **API Key 与限额**:
+
+```yaml
+remote-management:
+  disable-auto-update-panel: true
+```
+
+Then:
+
+```bash
+python3 scripts/patch-cpa-quota-page.py /opt/cliproxy-api/static/management.html
+```
+
+Set `disable-auto-update-panel` first. CPA otherwise re-downloads `management.html` on boot and wipes the patch. Re-run the script after a CPA upgrade.
 3. **Session 注入** — maps Codex `Session-Id` / Claude / DeepSeek Harness headers onto `x-opencode-session`, and rewrites Codex-style JSON (`xhigh`, `json_schema`, `namespace` tools).
 
 Management UI (after enable):
@@ -82,7 +95,7 @@ Requires Go 1.26+ and CGO.
 
 ```bash
 make test
-make build VERSION=0.2.1
+make build VERSION=0.2.2
 ```
 
 ## License

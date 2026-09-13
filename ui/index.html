@@ -5,23 +5,35 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenCode Go</title>
 <style>
-:root { color-scheme: dark; --bg:#101216; --card:#1b2028; --line:#2c3440; --text:#e8edf4; --muted:#93a0b3; --ok:#3dd68c; --warn:#f5c84c; --bad:#ff6b6b; --accent:#6ea8ff; }
+:root {
+  color-scheme: dark;
+  --bg:#101216; --card:#161b22; --line:#2c3440; --text:#e8edf4; --muted:#93a0b3;
+  --ok:#3dd68c; --warn:#f5c84c; --bad:#ff6b6b; --accent:#6ea8ff; --track:#0e1218;
+}
 * { box-sizing: border-box; }
 body { margin:0; font:14px/1.5 ui-sans-serif,system-ui,sans-serif; background:var(--bg); color:var(--text); }
-main { max-width: 880px; margin: 0 auto; padding: 24px; }
+main { max-width: 920px; margin: 0 auto; padding: 24px; }
 h1 { font-size: 22px; margin: 0 0 6px; }
+h2 { font-size: 16px; margin: 0 0 10px; }
 p, label { color: var(--muted); }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 14px 0; }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 14px 0; }
 .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 input { flex:1; min-width: 220px; background:#0e1218; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
 button { background:var(--accent); color:#081018; border:0; border-radius:8px; padding:8px 12px; font-weight:700; cursor:pointer; }
 button.secondary { background:#2a3340; color:var(--text); }
-.bars { display:grid; gap:10px; }
-.bar { height:10px; background:#0e1218; border-radius:99px; overflow:hidden; }
-.bar > i { display:block; height:100%; background:var(--ok); }
-.bad .bar > i { background: var(--bad); }
-.warn .bar > i { background: var(--warn); }
-.kv { display:flex; justify-content:space-between; gap:12px; }
+.grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); }
+.qcard { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.qhead { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.qicon { width:28px; height:28px; border-radius:8px; display:grid; place-items:center; font-weight:800; background:#2a3340; }
+.qname { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.plan { display:inline-flex; gap:6px; align-items:center; font-size:12px; color:var(--muted); margin-bottom:8px; }
+.plan b { color:var(--text); font-weight:700; }
+.qrow { margin-top:10px; }
+.qmeta { display:flex; justify-content:space-between; gap:12px; font-size:12px; color:var(--muted); }
+.qbar { height:8px; background:var(--track); border-radius:99px; overflow:hidden; margin-top:6px; }
+.qbar > i { display:block; height:100%; border-radius:99px; background:var(--ok); }
+.qrow.mid .qbar > i { background: var(--warn); }
+.qrow.low .qbar > i { background: var(--bad); }
 .err { color: var(--bad); }
 .ok { color: var(--ok); }
 </style>
@@ -29,9 +41,9 @@ button.secondary { background:#2a3340; color:var(--text); }
 <body>
 <main>
   <h1>OpenCode Go</h1>
-  <p>粘贴 Go API Key 即可写入渠道（模型列表 + <code>x-opencode-session</code>），并查看 5 小时 / 周 / 月限额。</p>
+  <p>粘贴 Go API Key 即可写入渠道（模型列表 + <code>x-opencode-session</code>）。限额卡片会出现在管理中心的「API Key 与限额」页面，和 Codex / Claude 同一套样式。</p>
 
-  <section class="card">
+  <section class="panel">
     <h2>快捷接入</h2>
     <div class="row">
       <input id="apiKey" type="password" placeholder="sk-… OpenCode Go API Key" autocomplete="off">
@@ -47,8 +59,8 @@ button.secondary { background:#2a3340; color:var(--text); }
     <p id="msg"></p>
   </section>
 
-  <section class="card">
-    <h2>限额</h2>
+  <section>
+    <h2>限额卡片</h2>
     <div id="quota">加载中…</div>
   </section>
 </main>
@@ -115,12 +127,16 @@ function setMsg(t, ok){
   el.textContent=t||'';
   el.className=ok?'ok':'err';
 }
-function barClass(pct){ if(pct>=95) return 'bad'; if(pct>=80) return 'warn'; return ''; }
+function remainingOf(w){
+  const used=Number(w&&w.percent||0);
+  return Math.max(0, Math.min(100, 100-used));
+}
+function rowClass(remain){ if(remain>=70) return ''; if(remain>=30) return 'mid'; return 'low'; }
 function renderUsage(u){
-  const rows=[['5 小时 rolling',u.rolling],['本周 weekly',u.weekly],['本月 monthly',u.monthly]];
+  const rows=[['5 小时限额',u.rolling],['周限额',u.weekly],['月限额',u.monthly]];
   return rows.map(([name,w])=>{
-    const pct=w&&w.percent||0;
-    return `<div class="${barClass(pct)}"><div class="kv"><span>${name} · ${w.status||''}</span><span>${pct}% used · reset ${w.resetsAt||''}</span></div><div class="bar"><i style="width:${Math.min(100,pct)}%"></i></div></div>`;
+    const remain=remainingOf(w);
+    return `<div class="qrow ${rowClass(remain)}"><div class="qmeta"><span>${name} · ${w&&w.status||''}</span><span>剩余 ${remain.toFixed(0)}% · ${w&&w.resetsAt||''}</span></div><div class="qbar"><i style="width:${remain}%"></i></div></div>`;
   }).join('');
 }
 function applyStatus(data){
@@ -130,13 +146,13 @@ function applyStatus(data){
     return;
   }
   if(!data.accounts||!data.accounts.length){
-    box.innerHTML='<p>还没有 OpenCode Go 渠道。上面粘贴 Key 后点接入。</p>';
+    box.innerHTML='<p>还没有 OpenCode Go 渠道。上面粘贴 Key 后点接入。接入后也会出现在「API Key 与限额」。</p>';
     return;
   }
-  box.innerHTML=data.accounts.map(a=>{
-    if(a.error) return `<p class="err">${a.key}: ${a.error}</p>`;
-    return `<h3>${a.key}</h3><div class="bars">${renderUsage(a.usage||{})}</div>`;
-  }).join('')+`<p>模型 ${data.modelCount||0} 个 · session 注入已开 · ${data.fetchedAt||''}</p>`;
+  box.innerHTML=`<div class="grid">${data.accounts.map(a=>{
+    if(a.error) return `<article class="qcard"><p class="err">${a.key}: ${a.error}</p></article>`;
+    return `<article class="qcard"><div class="qhead"><span class="qicon">O</span><span class="qname" title="${a.key}">${a.key}</span></div><div class="plan">套餐 <b>OpenCode Go</b></div>${renderUsage(a.usage||{})}</article>`;
+  }).join('')}</div><p>模型 ${data.modelCount||0} 个 · session 注入已开 · ${data.fetchedAt||''}</p>`;
 }
 async function loadStatus(){
   if(window.__OPENCODE_STATUS__) applyStatus(window.__OPENCODE_STATUS__);
