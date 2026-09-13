@@ -16,7 +16,7 @@ from pathlib import Path
 MARKER = "opencode-go"
 
 ADAPTER = (
-    "`opencode-go`:{type:`opencode-go`,i18nPrefix:`opencode_quota`,"
+    '["opencode-go"]:{type:`opencode-go`,i18nPrefix:`opencode_quota`,'
     "filterFn:e=>{let t=n_(e);return(t===`opencode-go`||t===`openai-compatible-opencode-go`"
     "||t===`openai-compatibility:opencode-go`||t.endsWith(`-opencode-go`)||t.endsWith(`:opencode-go`))&&!c_(e)},"
     "fetchQuota:async(e,t)=>{let n=bg(e.auth_index??e.authIndex);"
@@ -86,7 +86,7 @@ def patch(html: str) -> str:
     html = must_replace(
         html,
         "Zj={antigravity:qD.filterFn,claude:yO.filterFn,codex:FO.filterFn,kimi:BO.filterFn,xai:JO.filterFn}",
-        "Zj={antigravity:qD.filterFn,claude:yO.filterFn,codex:FO.filterFn,kimi:BO.filterFn,xai:JO.filterFn,`opencode-go`:rk[`opencode-go`].filterFn}",
+        'Zj={antigravity:qD.filterFn,claude:yO.filterFn,codex:FO.filterFn,kimi:BO.filterFn,xai:JO.filterFn,["opencode-go"]:rk["opencode-go"].filterFn}',
         "Zj",
     )
     html = must_replace(
