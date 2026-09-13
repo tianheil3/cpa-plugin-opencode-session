@@ -3,19 +3,34 @@ package main
 import (
 	"context"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
 const (
-	pluginID      = "opencode-session"
-	pluginName    = "OpenCode Session"
-	pluginAuthor  = "tianheil3"
-	pluginRepoURL = "https://github.com/tianheil3/cpa-plugin-opencode-session"
+	pluginID          = "opencode-session"
+	pluginName        = "OpenCode Go"
+	pluginAuthor      = "tianheil3"
+	pluginRepoURL     = "https://github.com/tianheil3/cpa-plugin-opencode-session"
+	quotaProviderID   = "opencode-go"
+	defaultZenBaseURL = "https://opencode.ai/zen/go/v1"
+	defaultClaudeURL  = "https://opencode.ai/zen/go"
 )
 
 type sessionPlugin struct {
 	cfg pluginConfig
+
+	mu          sync.Mutex
+	lastFailure *quotaEvent
+}
+
+type quotaEvent struct {
+	At      time.Time `json:"at"`
+	Model   string    `json:"model,omitempty"`
+	Status  int       `json:"status,omitempty"`
+	Message string    `json:"message,omitempty"`
 }
 
 var _ pluginapi.RequestInterceptor = (*sessionPlugin)(nil)

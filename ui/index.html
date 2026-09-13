@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCode Go</title>
+<style>
+:root { color-scheme: dark; --bg:#101216; --card:#1b2028; --line:#2c3440; --text:#e8edf4; --muted:#93a0b3; --ok:#3dd68c; --warn:#f5c84c; --bad:#ff6b6b; --accent:#6ea8ff; }
+* { box-sizing: border-box; }
+body { margin:0; font:14px/1.5 ui-sans-serif,system-ui,sans-serif; background:var(--bg); color:var(--text); }
+main { max-width: 880px; margin: 0 auto; padding: 24px; }
+h1 { font-size: 22px; margin: 0 0 6px; }
+p, label { color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 14px 0; }
+.row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+input { flex:1; min-width: 220px; background:#0e1218; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+button { background:var(--accent); color:#081018; border:0; border-radius:8px; padding:8px 12px; font-weight:700; cursor:pointer; }
+button.secondary { background:#2a3340; color:var(--text); }
+.bars { display:grid; gap:10px; }
+.bar { height:10px; background:#0e1218; border-radius:99px; overflow:hidden; }
+.bar > i { display:block; height:100%; background:var(--ok); }
+.bad .bar > i { background: var(--bad); }
+.warn .bar > i { background: var(--warn); }
+.kv { display:flex; justify-content:space-between; gap:12px; }
+pre { white-space:pre-wrap; color:var(--muted); font-size:12px; }
+.err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>OpenCode Go</h1>
+  <p>粘贴 Go API Key 一键写入渠道（模型列表 + <code>x-opencode-session</code>），并查看 5 小时 / 周 / 月限额。</p>
+
+  <section class="card">
+    <h2>快捷接入</h2>
+    <div class="row">
+      <input id="apiKey" type="password" placeholder="sk-… OpenCode Go API Key">
+      <label><input id="claude" type="checkbox"> 同时写 Claude 渠道</label>
+      <button onclick="connect()">接入</button>
+      <button class="secondary" onclick="syncModels()">同步模型</button>
+      <button class="secondary" onclick="loadStatus()">刷新限额</button>
+    </div>
+    <p>管理密钥会从同域 Management Center 的 localStorage 读取；读不到时可在下面手动填。</p>
+    <div class="row">
+      <input id="mgmtKey" type="password" placeholder="可选：Management Key">
+    </div>
+    <p id="msg"></p>
+  </section>
+
+  <section class="card">
+    <h2>限额</h2>
+    <div id="quota">加载中…</div>
+  </section>
+</main>
+<script>
+const ENC='enc::v1::';
+const SALT='cli-proxy-api-webui::secure-storage';
+function decodeEnc(v){
+  if(!v||!v.startsWith(ENC)) return v;
+  try{
+    const body=atob(v.slice(ENC.length));
+    const key=new TextEncoder().encode(SALT+'|'+location.host+'|'+navigator.userAgent);
+    const out=new Uint8Array(body.length);
+    for(let i=0;i<body.length;i++) out[i]=body.charCodeAt(i)^key[i%key.length];
+    return new TextDecoder().decode(out);
+  }catch(e){ return v; }
+}
+function findKey(){
+  const typed=document.getElementById('mgmtKey').value.trim();
+  if(typed) return typed;
+  const keys=['cli-proxy-api-webui:connection','cpa.connection','management-key','managementKey'];
+  const tryVal=v=>{
+    if(!v) return '';
+    const d=decodeEnc(v);
+    try{
+      const o=JSON.parse(d);
+      return o.password||o.managementKey||o.secret||o.key||o.management_key||'';
+    }catch(e){ return d.startsWith('enc::')?'':d; }
+  };
+  for(const k of keys){
+    const hit=tryVal(localStorage.getItem(k));
+    if(hit) return hit;
+  }
+  for(let i=0;i<localStorage.length;i++){
+    const hit=tryVal(localStorage.getItem(localStorage.key(i)));
+    if(hit && hit.length>=4) return hit;
+  }
+  return '';
+}
+async function api(method, path, body){
+  const key=findKey();
+  const headers={'Content-Type':'application/json'};
+  if(key){ headers.Authorization='Bearer '+key; headers['X-Management-Key']=key; }
+  const res=await fetch(path,{method,headers,body: body?JSON.stringify(body):undefined});
+  const text=await res.text();
+  let data={};
+  try{ data=JSON.parse(text); }catch(e){ data={error:text||res.statusText}; }
+  if(!res.ok) throw new Error(data.error||res.statusText);
+  return data;
+}
+function setMsg(t, ok){
+  const el=document.getElementById('msg');
+  el.textContent=t;
+  el.className=ok?'':'err';
+}
+function barClass(pct){ if(pct>=95) return 'bad'; if(pct>=80) return 'warn'; return ''; }
+function renderUsage(u){
+  const rows=[['5 小时 rolling',u.rolling],['本周 weekly',u.weekly],['本月 monthly',u.monthly]];
+  return rows.map(([name,w])=>{
+    const pct=w&&w.percent||0;
+    return `<div class="${barClass(pct)}"><div class="kv"><span>${name} · ${w.status||''}</span><span>${pct}% used · reset ${w.resetsAt||''}</span></div><div class="bar"><i style="width:${Math.min(100,pct)}%"></i></div></div>`;
+  }).join('');
+}
+async function loadStatus(){
+  const box=document.getElementById('quota');
+  try{
+    const data=await api('GET','/v0/management/plugins/opencode-session/status');
+    if(!data.accounts||!data.accounts.length){
+      box.innerHTML='<p>还没有 OpenCode Go 渠道。上面粘贴 Key 后点接入。</p>';
+      return;
+    }
+    box.innerHTML=data.accounts.map(a=>{
+      if(a.error) return `<p class="err">${a.key}: ${a.error}</p>`;
+      return `<h3>${a.key}</h3><div class="bars">${renderUsage(a.usage||{})}</div>`;
+    }).join('')+`<p>模型 ${data.modelCount||0} 个 · session 注入已开 · ${data.fetchedAt||''}</p>`;
+  }catch(e){
+    box.innerHTML=`<p class="err">${e.message}</p><p>如果这是跨域打开的插件页，请先在同域 management.html 登录并勾选记住密码，或手动填写 Management Key。</p>`;
+  }
+}
+async function connect(){
+  try{
+    const data=await api('POST','/v0/management/plugins/opencode-session/connect',{
+      api_key:document.getElementById('apiKey').value.trim(),
+      include_claude:document.getElementById('claude').checked
+    });
+    setMsg('已写入 '+data.provider+'，同步 '+data.models+' 个模型。CPA 会热加载 config.yaml。', true);
+    loadStatus();
+  }catch(e){ setMsg(e.message,false); }
+}
+async function syncModels(){
+  try{
+    const data=await api('POST','/v0/management/plugins/opencode-session/sync-models',{
+      api_key:document.getElementById('apiKey').value.trim()
+    });
+    setMsg('模型已同步：'+(data.models||[]).length+' 个。', true);
+    loadStatus();
+  }catch(e){ setMsg(e.message,false); }
+}
+loadStatus();
+</script>
+</body>
+</html>

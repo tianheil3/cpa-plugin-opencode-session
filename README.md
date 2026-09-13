@@ -1,39 +1,39 @@
 # cpa-plugin-opencode-session
 
-CLIProxyAPI request interceptor that injects `x-opencode-session` for OpenCode Zen / OpenCode Go, and optionally rewrites request JSON so Codex-style payloads work on those models.
-
-Codex CLI sends `Session-Id`. OpenCode Zen requires `x-opencode-session`. CLIProxyAPI's OpenAI-compat executor rebuilds upstream headers, so the client header never reaches Zen unless a plugin writes it onto the execution request **and** the provider config copies it with `$x-opencode-session`.
+CLIProxyAPI plugin for **OpenCode Go**: one-click connect, quota windows, and the `x-opencode-session` header Codex/Claude clients forget to send.
 
 [中文说明](README.zh-CN.md)
 
 ## Capability
 
 - ID: `opencode-session`
-- Capability: `request_interceptor`
+- Capabilities: `request_interceptor`, `management_api`, `quota_provider`, `usage_plugin`
 - Author: tianheil3
 
-## What it does
+## What you get
 
-On `request.intercept_before` and `request.intercept_after`:
+1. **快捷接入** — paste a Go API key on the plugin page. It probes `GET /zen/go/v1/models` and `GET /zen/go/v1/usage`, then writes an `openai-compatibility` provider named `opencode-go` (models, `disable-cooling`, `request-retry`, `x-opencode-session: $x-opencode-session`, `proxy-url: direct`). Optional Claude-compatible channel at `https://opencode.ai/zen/go`.
+2. **限额管理** — rolling 5h / weekly / monthly used-percent from the official usage API. Exposed on the plugin page and as a CPA `QuotaProvider` (`opencode-go`).
+3. **Session 注入** — maps Codex `Session-Id` / Claude / DeepSeek Harness headers onto `x-opencode-session`, and rewrites Codex-style JSON (`xhigh`, `json_schema`, `namespace` tools).
 
-1. Resolve a session id (first non-empty wins):
-   - `x-opencode-session`
-   - Codex `Session-Id` / `Thread-Id`
-   - Claude `X-Claude-Code-Session-Id`
-   - DeepSeek Harness `X-DeepSeek-Harness-Session-Id` / `X-Session-Affinity`
-   - `X-Session-Id`, `X-Client-Request-Id`
-   - body `prompt_cache_key` / `client_metadata.session_id`
-   - host `Metadata.canonical_session_id`
-   - generated UUID (last resort; unblocks `MissingSessionID`)
-2. Set execution header `x-opencode-session` (and `Session-Id`) to that value.
-3. Optionally rewrite JSON:
-   - clamp `xhigh` / `max` / `ultra` reasoning to `high` for models that reject those levels
-   - drop `text.format=json_schema` and `include: reasoning.encrypted_content`
-   - flatten `namespace` tools and drop non-`function` tools (including `web_search`)
+Management UI (after enable):
 
-## Install from the plugin store
+```text
+/v0/resource/plugins/opencode-session/status
+```
 
-After the official registry lists this plugin:
+Authenticated APIs (management key):
+
+| Route | Purpose |
+|---|---|
+| `GET /v0/management/plugins/opencode-session/status` | Masked keys, quota windows, model list |
+| `POST /v0/management/plugins/opencode-session/connect` | `{ "api_key": "sk-...", "include_claude": false }` |
+| `POST /v0/management/plugins/opencode-session/sync-models` | Refresh the model list from Zen |
+| `POST /v0/management/plugins/opencode-session/refresh` | Same as status |
+
+Open the page from the same origin as `management.html` so it can reuse the stored management key.
+
+## Install
 
 ```yaml
 plugins:
@@ -45,35 +45,22 @@ plugins:
       priority: 10
 ```
 
-## Required provider header
-
-OpenAI-compat executors do not forward interceptor headers by themselves. Copy the injected value onto the wire:
+Restart CLIProxyAPI. One-click connect writes the provider for you. If you already have it, keep:
 
 ```yaml
-openai-compatibility:
-  - name: opencode-go
-    base-url: https://opencode.ai/zen/go/v1
-    headers:
-      x-opencode-session: "$x-opencode-session"
+headers:
+  x-opencode-session: "$x-opencode-session"
 ```
 
-`$Name` is resolved from the plugin-augmented execution headers. If the value is missing, CLIProxyAPI omits the header.
+## Session rewrite
 
-## Manual install
+On `request.intercept_before` / `request.intercept_after`:
 
-Place the shared library in the host plugin directory:
+1. Resolve a session id: existing `x-opencode-session` → Codex `Session-Id`/`Thread-Id` → Claude / DeepSeek Harness headers → `prompt_cache_key` → host `canonical_session_id` → UUID.
+2. Set execution header `x-opencode-session`.
+3. Optionally rewrite JSON (clamp `xhigh`, drop `json_schema`, flatten function tools).
 
-```text
-plugins/linux/amd64/opencode-session.so
-plugins/darwin/arm64/opencode-session.dylib
-plugins/windows/amd64/opencode-session.dll
-```
-
-Enable `plugins.configs.opencode-session.enabled` and restart CLIProxyAPI.
-
-## Configuration
-
-Host-owned fields (`enabled`, `priority`) stay in CLIProxyAPI. The rest is passed to the plugin:
+## Plugin config
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -81,11 +68,13 @@ Host-owned fields (`enabled`, `priority`) stay in CLIProxyAPI. The rest is passe
 | `clamp_reasoning` | `true` | Clamp unsupported reasoning levels |
 | `drop_json_schema` | `true` | Drop json_schema / encrypted include |
 | `function_tools` | `true` | Keep only `type=function` tools |
-| `match_models` | empty | If set, only rewrite these exact names |
-| `match_prefixes` | empty | If set, only rewrite matching prefixes |
-| `skip_models` | empty | Skip body rewrite for these names |
+| `cpa_config_path` | `config.yaml` | Config file for one-click connect |
+| `provider_name` | `opencode-go` | openai-compatibility provider name |
+| `base_url` | `https://opencode.ai/zen/go/v1` | Go API base |
+| `include_claude` | `false` | Also write Claude-compatible channel |
+| `match_models` / `match_prefixes` / `skip_models` | empty | Limit body rewrite |
 
-Session header injection always runs, even when body rewrite is skipped.
+Session injection always runs.
 
 ## Build
 
@@ -93,19 +82,8 @@ Requires Go 1.26+ and CGO.
 
 ```bash
 make test
-make build
+make build VERSION=0.2.0
 ```
-
-## Release layout
-
-GitHub Release tag `vX.Y.Z` must contain:
-
-```text
-opencode-session_<version>_<goos>_<goarch>.zip
-checksums.txt
-```
-
-Each zip has the dynamic library at the zip root (`opencode-session.so` / `.dylib` / `.dll`).
 
 ## License
 

@@ -86,6 +86,13 @@ type abiRegistration struct {
 
 type abiCapabilities struct {
 	RequestInterceptor bool `json:"request_interceptor"`
+	ManagementAPI      bool `json:"management_api"`
+	QuotaProvider      bool `json:"quota_provider"`
+	UsagePlugin        bool `json:"usage_plugin"`
+}
+
+type identifierResponse struct {
+	Identifier string `json:"identifier"`
 }
 
 func main() {}
@@ -178,6 +185,47 @@ func handleABIMethod(ctx context.Context, method string, request []byte) ([]byte
 		}
 		resp, errCall := p.InterceptRequestAfterAuth(ctx, req.RequestInterceptRequest)
 		return abiOKEnvelopeWithError(resp, errCall)
+	case pluginabi.MethodManagementRegister:
+		var req pluginapi.ManagementRegistrationRequest
+		_ = json.Unmarshal(request, &req)
+		resp, errCall := p.RegisterManagement(ctx, req)
+		if errCall != nil {
+			return nil, errCall
+		}
+		return abiOKEnvelope(toABIManagementRegistration(resp))
+	case pluginabi.MethodManagementHandle:
+		var req pluginapi.ManagementRequest
+		if errDecode := json.Unmarshal(request, &req); errDecode != nil {
+			return nil, errDecode
+		}
+		resp, errCall := p.HandleManagement(ctx, req)
+		return abiOKEnvelopeWithError(resp, errCall)
+	case pluginabi.MethodQuotaIdentifier:
+		return abiOKEnvelope(identifierResponse{Identifier: quotaProviderID})
+	case pluginabi.MethodQuotaDescribe:
+		var req pluginapi.QuotaDescribeRequest
+		_ = json.Unmarshal(request, &req)
+		resp, errCall := (&quotaAdapter{p: p}).DescribeQuota(ctx, req)
+		return abiOKEnvelopeWithError(resp, errCall)
+	case pluginabi.MethodQuotaFetch:
+		var req pluginapi.QuotaFetchRequest
+		if errDecode := json.Unmarshal(request, &req); errDecode != nil {
+			return nil, errDecode
+		}
+		resp, errCall := (&quotaAdapter{p: p}).FetchQuota(ctx, req)
+		return abiOKEnvelopeWithError(resp, errCall)
+	case pluginabi.MethodQuotaReset:
+		var req pluginapi.QuotaResetRequest
+		_ = json.Unmarshal(request, &req)
+		resp, errCall := (&quotaAdapter{p: p}).ResetQuota(ctx, req)
+		return abiOKEnvelopeWithError(resp, errCall)
+	case pluginabi.MethodUsageHandle:
+		var rec pluginapi.UsageRecord
+		if errDecode := json.Unmarshal(request, &rec); errDecode != nil {
+			return nil, errDecode
+		}
+		p.HandleUsage(ctx, rec)
+		return abiOKEnvelope(map[string]any{})
 	default:
 		return abiErrorEnvelope("unknown_method", "unknown method: "+method), nil
 	}
@@ -205,6 +253,9 @@ func handleRegister(request []byte) ([]byte, error) {
 		Metadata:      plugin.Metadata,
 		Capabilities: abiCapabilities{
 			RequestInterceptor: plugin.Capabilities.RequestInterceptor != nil,
+			ManagementAPI:      plugin.Capabilities.ManagementAPI != nil,
+			QuotaProvider:      plugin.Capabilities.QuotaProvider != nil,
+			UsagePlugin:        plugin.Capabilities.UsagePlugin != nil,
 		},
 	})
 }

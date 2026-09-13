@@ -7,13 +7,17 @@ import (
 )
 
 type pluginConfig struct {
-	RewriteBody     bool     `yaml:"rewrite_body"`
-	ClampReasoning  bool     `yaml:"clamp_reasoning"`
-	DropJSONSchema  bool     `yaml:"drop_json_schema"`
-	FunctionTools   bool     `yaml:"function_tools"`
-	MatchModels     []string `yaml:"match_models"`
-	MatchPrefixes   []string `yaml:"match_prefixes"`
-	SkipModels      []string `yaml:"skip_models"`
+	RewriteBody    bool     `yaml:"rewrite_body"`
+	ClampReasoning bool     `yaml:"clamp_reasoning"`
+	DropJSONSchema bool     `yaml:"drop_json_schema"`
+	FunctionTools  bool     `yaml:"function_tools"`
+	MatchModels    []string `yaml:"match_models"`
+	MatchPrefixes  []string `yaml:"match_prefixes"`
+	SkipModels     []string `yaml:"skip_models"`
+	CPAConfigPath  string   `yaml:"cpa_config_path"`
+	ProviderName   string   `yaml:"provider_name"`
+	BaseURL        string   `yaml:"base_url"`
+	IncludeClaude  bool     `yaml:"include_claude"`
 }
 
 func defaultConfig() pluginConfig {
@@ -22,6 +26,9 @@ func defaultConfig() pluginConfig {
 		ClampReasoning: true,
 		DropJSONSchema: true,
 		FunctionTools:  true,
+		CPAConfigPath:  "config.yaml",
+		ProviderName:   "opencode-go",
+		BaseURL:        defaultZenBaseURL,
 	}
 }
 
@@ -33,7 +40,32 @@ func parseConfig(raw []byte) (pluginConfig, error) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return pluginConfig{}, err
 	}
+	if strings.TrimSpace(cfg.CPAConfigPath) == "" {
+		cfg.CPAConfigPath = "config.yaml"
+	}
+	if strings.TrimSpace(cfg.ProviderName) == "" {
+		cfg.ProviderName = "opencode-go"
+	}
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		cfg.BaseURL = defaultZenBaseURL
+	}
 	return cfg, nil
+}
+
+func (c pluginConfig) providerName() string {
+	name := strings.TrimSpace(c.ProviderName)
+	if name == "" {
+		return "opencode-go"
+	}
+	return name
+}
+
+func (c pluginConfig) zenBaseURL() string {
+	base := strings.TrimSpace(c.BaseURL)
+	if base == "" {
+		return defaultZenBaseURL
+	}
+	return strings.TrimRight(base, "/")
 }
 
 func (c pluginConfig) shouldRewrite(model, requested string) bool {

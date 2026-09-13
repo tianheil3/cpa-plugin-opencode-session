@@ -4,7 +4,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-var pluginVersion = "0.1.0"
+var pluginVersion = "0.2.0"
 
 func buildPlugin(configYAML []byte, _ string) (pluginapi.Plugin, error) {
 	cfg, err := parseConfig(configYAML)
@@ -12,6 +12,7 @@ func buildPlugin(configYAML []byte, _ string) (pluginapi.Plugin, error) {
 		return pluginapi.Plugin{}, err
 	}
 	p := &sessionPlugin{cfg: cfg}
+	q := &quotaAdapter{p: p}
 	return pluginapi.Plugin{
 		Metadata: pluginapi.Metadata{
 			Name:             pluginName,
@@ -19,45 +20,24 @@ func buildPlugin(configYAML []byte, _ string) (pluginapi.Plugin, error) {
 			Author:           pluginAuthor,
 			GitHubRepository: pluginRepoURL,
 			ConfigFields: []pluginapi.ConfigField{
-				{
-					Name:        "rewrite_body",
-					Type:        pluginapi.ConfigFieldTypeBoolean,
-					Description: "Rewrite request JSON (tools, reasoning, json_schema) for OpenCode-compatible models.",
-				},
-				{
-					Name:        "clamp_reasoning",
-					Type:        pluginapi.ConfigFieldTypeBoolean,
-					Description: "Clamp xhigh/max/ultra reasoning to high for models that reject those levels.",
-				},
-				{
-					Name:        "drop_json_schema",
-					Type:        pluginapi.ConfigFieldTypeBoolean,
-					Description: "Drop text.format json_schema for models that do not support it.",
-				},
-				{
-					Name:        "function_tools",
-					Type:        pluginapi.ConfigFieldTypeBoolean,
-					Description: "Keep only type=function tools (flatten namespace, drop web_search).",
-				},
-				{
-					Name:        "match_models",
-					Type:        pluginapi.ConfigFieldTypeArray,
-					Description: "If set, only rewrite bodies for these exact model names. Session header is always injected.",
-				},
-				{
-					Name:        "match_prefixes",
-					Type:        pluginapi.ConfigFieldTypeArray,
-					Description: "If set, only rewrite bodies for models with these prefixes.",
-				},
-				{
-					Name:        "skip_models",
-					Type:        pluginapi.ConfigFieldTypeArray,
-					Description: "Model names that skip body rewrite.",
-				},
+				{Name: "rewrite_body", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Rewrite Codex-style JSON for OpenCode Go models."},
+				{Name: "clamp_reasoning", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Clamp xhigh/max/ultra reasoning to high."},
+				{Name: "drop_json_schema", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Drop json_schema / encrypted include."},
+				{Name: "function_tools", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Keep only type=function tools."},
+				{Name: "cpa_config_path", Type: pluginapi.ConfigFieldTypeString, Description: "Path to CLIProxyAPI config.yaml for one-click connect."},
+				{Name: "provider_name", Type: pluginapi.ConfigFieldTypeString, Description: "openai-compatibility provider name. Default opencode-go."},
+				{Name: "base_url", Type: pluginapi.ConfigFieldTypeString, Description: "OpenCode Go base URL. Default https://opencode.ai/zen/go/v1."},
+				{Name: "include_claude", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Also write the same key as a Claude-compatible OpenCode Go channel."},
+				{Name: "match_models", Type: pluginapi.ConfigFieldTypeArray, Description: "If set, only rewrite bodies for these exact model names."},
+				{Name: "match_prefixes", Type: pluginapi.ConfigFieldTypeArray, Description: "If set, only rewrite bodies for models with these prefixes."},
+				{Name: "skip_models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model names that skip body rewrite."},
 			},
 		},
 		Capabilities: pluginapi.Capabilities{
 			RequestInterceptor: p,
+			ManagementAPI:      p,
+			QuotaProvider:      q,
+			UsagePlugin:        p,
 		},
 	}, nil
 }
