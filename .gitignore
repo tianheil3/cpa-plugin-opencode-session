@@ -1,0 +1,12 @@
+.DS_Store
+dist/
+*.h
+*.so
+*.dylib
+*.dll
+*.zip
+checksums.txt
+.idea/
+*.iml
+*.log
+*.tmp
