@@ -29,20 +29,54 @@ func (q *quotaAdapter) FetchQuota(ctx context.Context, req pluginapi.QuotaFetchR
 	if !isOpenCodeQuotaRequest(req, q.p.cfg.providerName()) {
 		return pluginapi.QuotaFetchResponse{}, fmt.Errorf("credential is not OpenCode Go")
 	}
+	entries, _, _ := listConfiguredEntries(resolveConfigPath(q.p.cfg.CPAConfigPath), q.p.cfg.providerName())
 	apiKey := apiKeyFromQuotaRequest(req)
-	if apiKey == "" {
-		keys, _, err := listConfiguredKeys(resolveConfigPath(q.p.cfg.CPAConfigPath), q.p.cfg.providerName())
-		if err == nil && len(keys) > 0 {
-			apiKey = keys[0]
+	baseURL := q.p.cfg.zenBaseURL()
+	matched := configuredEntry{}
+	if reqAuthID := strings.TrimSpace(req.AuthID); reqAuthID != "" {
+		for _, entry := range entries {
+			if entry.AuthID(q.p.cfg.providerName()) == reqAuthID {
+				matched = entry
+				break
+			}
 		}
+	}
+	if apiKey == "" {
+		apiKey = matched.APIKey
+	}
+	if apiKey == "" && len(entries) == 1 {
+		matched = entries[0]
+		apiKey = matched.APIKey
 	}
 	if apiKey == "" {
 		return pluginapi.QuotaFetchResponse{}, fmt.Errorf("no OpenCode Go API key on this credential")
 	}
-	usage, err := fetchZenUsage(ctx, q.p.cfg.zenBaseURL(), apiKey)
+	if matched.BaseURL != "" {
+		baseURL = matched.BaseURL
+	} else if req.Attributes != nil {
+		if v := strings.TrimSpace(req.Attributes["base_url"]); v != "" {
+			baseURL = v
+		}
+	}
+	usage, err := fetchZenUsage(ctx, baseURL, apiKey)
 	if err != nil {
 		return pluginapi.QuotaFetchResponse{}, err
 	}
+	authID := strings.TrimSpace(req.AuthID)
+	if authID == "" {
+		proxy := "direct"
+		if matched.ProxyURL != "" {
+			proxy = matched.ProxyURL
+		} else if req.Attributes != nil {
+			if v := strings.TrimSpace(req.Attributes["proxy_url"]); v != "" {
+				proxy = v
+			} else if v := strings.TrimSpace(req.Attributes["proxy-url"]); v != "" {
+				proxy = v
+			}
+		}
+		authID = stableCompatAuthID(q.p.cfg.providerName(), apiKey, baseURL, proxy)
+	}
+	q.p.rememberUsage(authID, maskKey(apiKey), usage)
 	return usageToQuota(usage), nil
 }
 

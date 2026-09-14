@@ -89,6 +89,7 @@ type abiCapabilities struct {
 	ManagementAPI      bool `json:"management_api"`
 	QuotaProvider      bool `json:"quota_provider"`
 	UsagePlugin        bool `json:"usage_plugin"`
+	Scheduler          bool `json:"scheduler"`
 }
 
 type identifierResponse struct {
@@ -226,6 +227,13 @@ func handleABIMethod(ctx context.Context, method string, request []byte) ([]byte
 		}
 		p.HandleUsage(ctx, rec)
 		return abiOKEnvelope(map[string]any{})
+	case pluginabi.MethodSchedulerPick:
+		var req pluginapi.SchedulerPickRequest
+		if errDecode := json.Unmarshal(request, &req); errDecode != nil {
+			return nil, errDecode
+		}
+		resp, errCall := p.Pick(ctx, req)
+		return abiOKEnvelopeWithError(resp, errCall)
 	default:
 		return abiErrorEnvelope("unknown_method", "unknown method: "+method), nil
 	}
@@ -256,6 +264,7 @@ func handleRegister(request []byte) ([]byte, error) {
 			ManagementAPI:      plugin.Capabilities.ManagementAPI != nil,
 			QuotaProvider:      plugin.Capabilities.QuotaProvider != nil,
 			UsagePlugin:        plugin.Capabilities.UsagePlugin != nil,
+			Scheduler:          plugin.Capabilities.Scheduler != nil,
 		},
 	})
 }

@@ -58,6 +58,52 @@ func TestUpsertOpenCodeProvider(t *testing.T) {
 	}
 }
 
+func TestUpsertReenablesDisabledProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	src := []byte("openai-compatibility:\n  - name: opencode-go\n    base-url: https://opencode.ai/zen/go/v1\n    disabled: true\n    api-key-entries:\n      - api-key: sk-old\n")
+	if err := os.WriteFile(path, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertOpenCodeProvider(path, "opencode-go", defaultZenBaseURL, "sk-old", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	text := string(raw)
+	if !strings.Contains(text, "disabled: false") {
+		t.Fatalf("connect must re-enable the channel:\n%s", text)
+	}
+	if strings.Contains(text, "disabled: true") {
+		t.Fatalf("stale disabled: true left in place:\n%s", text)
+	}
+}
+
+func TestUpsertKeepsExistingKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	src := []byte("openai-compatibility:\n  - name: opencode-go\n    base-url: https://opencode.ai/zen/go/v1\n    api-key-entries:\n      - api-key: sk-one\n        proxy-url: direct\n")
+	if err := os.WriteFile(path, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertOpenCodeProvider(path, "opencode-go", defaultZenBaseURL, "sk-two", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	keys, _, err := listConfiguredKeys(path, "opencode-go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("keys = %#v", keys)
+	}
+	seen := map[string]bool{}
+	for _, key := range keys {
+		seen[key] = true
+	}
+	if !seen["sk-one"] || !seen["sk-two"] {
+		t.Fatalf("keys = %#v", keys)
+	}
+}
+
 func TestUsageToQuota(t *testing.T) {
 	t.Parallel()
 	q := usageToQuota(zenUsage{

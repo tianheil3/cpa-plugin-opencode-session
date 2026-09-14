@@ -60,8 +60,8 @@ func TestBuildPluginMetadata(t *testing.T) {
 	if plugin.Metadata.Name != pluginName {
 		t.Fatalf("name = %q", plugin.Metadata.Name)
 	}
-	if plugin.Capabilities.ManagementAPI == nil || plugin.Capabilities.QuotaProvider == nil {
-		t.Fatal("expected management and quota capabilities")
+	if plugin.Capabilities.ManagementAPI == nil || plugin.Capabilities.QuotaProvider == nil || plugin.Capabilities.Scheduler == nil {
+		t.Fatal("expected management, quota, and scheduler capabilities")
 	}
 	interceptor, ok := plugin.Capabilities.RequestInterceptor.(*sessionPlugin)
 	if !ok || interceptor.Identifier() != pluginID {

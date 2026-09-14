@@ -1,5 +1,5 @@
 PLUGIN_NAME ?= opencode-session
-VERSION ?= 0.2.2
+VERSION ?= 0.2.7
 BUILD_DIR ?= .
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)

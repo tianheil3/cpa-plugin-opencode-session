@@ -28,6 +28,7 @@ button.secondary { background:#2a3340; color:var(--text); }
 .qname { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .plan { display:inline-flex; gap:6px; align-items:center; font-size:12px; color:var(--muted); margin-bottom:8px; }
 .plan b { color:var(--text); font-weight:700; }
+.badge { font-size:11px; padding:2px 8px; border-radius:99px; background:#1e3a2f; color:var(--ok); }
 .qrow { margin-top:10px; }
 .qmeta { display:flex; justify-content:space-between; gap:12px; font-size:12px; color:var(--muted); }
 .qbar { height:8px; background:var(--track); border-radius:99px; overflow:hidden; margin-top:6px; }
@@ -41,18 +42,18 @@ button.secondary { background:#2a3340; color:var(--text); }
 <body>
 <main>
   <h1>OpenCode Go</h1>
-  <p>粘贴 Go API Key 即可写入渠道（模型列表 + <code>x-opencode-session</code>）。限额卡片会出现在管理中心的「API Key 与限额」页面，和 Codex / Claude 同一套样式。</p>
+  <p>可接入多个 Go 订阅。请求时按 5 小时 / 周 / 月剩余额度自动切到最宽裕的 Key。限额卡片也会出现在管理中心「配额管理」。</p>
 
   <section class="panel">
-    <h2>快捷接入</h2>
+    <h2>订阅池</h2>
     <div class="row">
-      <input id="apiKey" type="password" placeholder="sk-… OpenCode Go API Key" autocomplete="off">
+      <input id="apiKey" type="password" placeholder="sk-… 再贴一个 Key 就会加入池" autocomplete="off">
       <label><input id="claude" type="checkbox"> 同时写 Claude 渠道</label>
       <button id="btnConnect" type="button">接入</button>
       <button id="btnSync" class="secondary" type="button">同步模型</button>
       <button id="btnRefresh" class="secondary" type="button">刷新限额</button>
     </div>
-    <p>写入配置需要 Management Key。从管理中心插件页打开且勾选过「记住密码」时会自动读取；读不到时再手动填。</p>
+    <p>写入配置需要 Management Key。已从管理中心打开本页时会自动带上。读不到时勾选登录页「记住密码」后重新登录，或把 <b>Management Key</b> 填到下面（不是上面的 Go API Key）。</p>
     <div class="row">
       <input id="mgmtKey" type="password" placeholder="Management Key（自动读取失败时再填）" autocomplete="off">
     </div>
@@ -68,47 +69,177 @@ button.secondary { background:#2a3340; color:var(--text); }
 window.__OPENCODE_STATUS__ = null;
 const ENC='enc::v1::';
 const SALT='cli-proxy-api-webui::secure-storage';
-function xorKey(){
-  return new TextEncoder().encode(SALT+'|'+location.host+'|'+navigator.userAgent);
+const SKIP={connected:1,disconnected:1,connecting:1,error:1,true:1,false:1};
+function looksLikeKey(s){
+  s=String(s==null?'':s).trim();
+  if(!s||s.length<1) return '';
+  if(SKIP[s]||s.startsWith(ENC)||s.startsWith('{')||s.startsWith('[')) return '';
+  if(/^https?:\/\//i.test(s)) return '';
+  if(/^\d+\.\d+(\.\d+)?$/.test(s)) return '';
+  return s;
+}
+function xorKeyOf(win){
+  const host=(win&&win.location&&win.location.host)||location.host;
+  const ua=(win&&win.navigator&&win.navigator.userAgent)||navigator.userAgent;
+  return new TextEncoder().encode(SALT+'|'+host+'|'+ua);
 }
 function decodeEnc(v){
   if(!v||!v.startsWith(ENC)) return v;
+  const wins=[window];
+  try{ if(window.parent&&window.parent!==window) wins.push(window.parent); }catch(e){}
+  for(const w of wins){
+    try{
+      const body=atob(v.slice(ENC.length));
+      const key=xorKeyOf(w);
+      const out=new Uint8Array(body.length);
+      for(let i=0;i<body.length;i++) out[i]=body.charCodeAt(i)^key[i%key.length];
+      const text=new TextDecoder().decode(out);
+      if(!text||/[\u0000-\u0008]/.test(text)) continue;
+      try{ JSON.parse(text); return text; }catch(e){}
+      if(looksLikeKey(text)) return text;
+    }catch(e){}
+  }
+  return '';
+}
+function extractKey(decoded){
+  if(!decoded) return '';
   try{
-    const body=atob(v.slice(ENC.length));
-    const key=xorKey();
-    const out=new Uint8Array(body.length);
-    for(let i=0;i<body.length;i++) out[i]=body.charCodeAt(i)^key[i%key.length];
-    return new TextDecoder().decode(out);
-  }catch(e){ return ''; }
+    const o=JSON.parse(decoded);
+    if(typeof o==='string') return looksLikeKey(o);
+    if(o&&typeof o==='object'){
+      const st=(o.state&&typeof o.state==='object')?o.state:o;
+      return looksLikeKey(st.managementKey||st.password||st.management_key||'');
+    }
+  }catch(e){}
+  return looksLikeKey(decoded);
 }
 function unwrapStored(v){
   if(!v) return '';
-  const d=decodeEnc(v);
+  return extractKey(decodeEnc(v));
+}
+function readStore(store){
+  if(!store) return '';
+  const names=['cli-proxy-auth','managementKey','cpa:managementKey'];
+  for(const name of names){
+    try{
+      const got=unwrapStored(store.getItem(name));
+      if(got) return got;
+    }catch(e){}
+  }
   try{
-    const o=JSON.parse(d);
-    if(typeof o==='string') return o.trim();
-    if(typeof o==='number'||typeof o==='boolean') return String(o);
-    if(o&&typeof o==='object'){
-      const s=o.password||o.managementKey||o.secret||o.key||o.management_key||'';
-      return String(s||'').trim();
+    for(let i=0;i<store.length;i++){
+      const name=store.key(i);
+      if(!name||names.indexOf(name)>=0) continue;
+      const got=unwrapStored(store.getItem(name));
+      if(got) return got;
     }
   }catch(e){}
-  return d.startsWith(ENC)?'':String(d||'').trim();
+  return '';
+}
+function parentWindows(){
+  const out=[window];
+  try{ if(window.parent&&window.parent!==window) out.push(window.parent); }catch(e){}
+  try{ if(window.top&&window.top!==window&&out.indexOf(window.top)<0) out.push(window.top); }catch(e){}
+  return out;
+}
+function liveKey(){
+  for(const w of parentWindows()){
+    try{ const k=looksLikeKey(w.__CPA_MGMT_KEY); if(k) return k; }catch(e){}
+  }
+  try{ const k=looksLikeKey(window.__CPA_IFRAME_KEY); if(k) return k; }catch(e){}
+  return '';
+}
+function hookValue(v){
+  if(v&&typeof v==='object'&&'value' in v&&(typeof v.value==='string'||typeof v.value==='boolean')) return v.value;
+  return v;
+}
+function pickFromHooks(hooks){
+  const vals=hooks.map(hookValue);
+  for(const v of vals){
+    if(v&&typeof v==='object'){
+      const k=looksLikeKey(v.managementKey)||(v.state&&looksLikeKey(v.state.managementKey));
+      if(k) return k;
+    }
+  }
+  const hasAuth=vals.some(v=>v===true);
+  const urls=vals.some(v=>typeof v==='string'&&/^https?:\/\//i.test(v.trim()));
+  const secrets=vals.filter(v=>typeof v==='string'&&looksLikeKey(v));
+  if(hasAuth&&urls&&secrets.length) return secrets.sort((a,b)=>b.length-a.length)[0];
+  return '';
+}
+function keyFromFiber(doc){
+  try{
+    const root=doc.getElementById('root');
+    if(!root) return '';
+    const names=Object.getOwnPropertyNames(root).concat(Object.keys(root));
+    const seen=new Set();
+    let n=0;
+    function walk(node){
+      if(!node||n>4000) return '';
+      try{ if(seen.has(node)) return ''; seen.add(node); }catch(e){ return ''; }
+      n++;
+      try{
+        const hooks=[];
+        let s=node.memoizedState,h=0;
+        while(s&&h<60){
+          hooks.push(s.memoizedState);
+          if(s.queue&&s.queue.lastRenderedState!==undefined) hooks.push(s.queue.lastRenderedState);
+          s=s.next; h++;
+        }
+        const got=pickFromHooks(hooks);
+        if(got) return got;
+        const props=node.memoizedProps;
+        if(props){
+          const k=looksLikeKey(props.managementKey);
+          if(k) return k;
+        }
+      }catch(e){}
+      return walk(node.child)||walk(node.sibling);
+    }
+    for(const name of names){
+      if(!name||name.toLowerCase().indexOf('react')<0) continue;
+      let fiber=root[name];
+      if(fiber&&fiber.current) fiber=fiber.current;
+      const got=walk(fiber);
+      if(got) return got;
+    }
+  }catch(e){}
+  return '';
 }
 function findKey(){
   const typed=document.getElementById('mgmtKey').value.trim();
   if(typed) return typed;
-  try{
-    const direct=unwrapStored(localStorage.getItem('managementKey'));
-    if(direct) return direct;
-  }catch(e){}
+  const live=liveKey();
+  if(live) return live;
+  const stores=[];
+  for(const w of parentWindows()){
+    try{ stores.push(w.localStorage); }catch(e){}
+    try{ stores.push(w.sessionStorage); }catch(e){}
+  }
+  for(const store of stores){
+    const got=readStore(store);
+    if(got) return got;
+  }
+  for(const w of parentWindows()){
+    try{
+      const got=keyFromFiber(w.document);
+      if(got) return got;
+    }catch(e){}
+  }
   return '';
 }
+window.addEventListener('message',function(ev){
+  try{
+    const d=ev.data||{};
+    const k=looksLikeKey(d.key||d.managementKey);
+    if(k&&(d.type==='cpa-management-key'||d.type==='cpa-auth')) window.__CPA_IFRAME_KEY=k;
+  }catch(e){}
+});
 function friendlyError(text, status){
   const s=String(text||'');
   if(/invalid management key/i.test(s)) return 'Management Key 不正确。';
-  if(/missing management key/i.test(s) || (status===401 && !s)) return '管理中心未登录：请从 Management 的插件页打开本页并勾选记住密码，或在下方填写 Management Key。';
-  if(status===401) return /invalid/i.test(s) ? 'Management Key 不正确。' : '管理中心未登录：请从 Management 的插件页打开本页并勾选记住密码，或在下方填写 Management Key。';
+  if(/missing management key/i.test(s) || (status===401 && !s)) return '读不到 Management Key：请硬刷新管理中心后再打开本页，或勾选「记住密码」后重新登录，或把登录用的 Management Key 填到下面。Go API Key 填上面。';
+  if(status===401) return /invalid/i.test(s) ? 'Management Key 不正确。' : '读不到 Management Key：请硬刷新管理中心后再打开本页，或勾选「记住密码」后重新登录，或把登录用的 Management Key 填到下面。Go API Key 填上面。';
   return s||('HTTP '+status);
 }
 async function api(method, path, body){
@@ -146,13 +277,15 @@ function applyStatus(data){
     return;
   }
   if(!data.accounts||!data.accounts.length){
-    box.innerHTML='<p>还没有 OpenCode Go 渠道。上面粘贴 Key 后点接入。接入后也会出现在「API Key 与限额」。</p>';
+    box.innerHTML='<p>订阅池是空的。上面粘贴 Key 后点接入。可重复接入多个订阅，限额打满会自动切。</p>';
     return;
   }
+  const preferred=(data.pool&&data.pool.preferred)||'';
   box.innerHTML=`<div class="grid">${data.accounts.map(a=>{
     if(a.error) return `<article class="qcard"><p class="err">${a.key}: ${a.error}</p></article>`;
-    return `<article class="qcard"><div class="qhead"><span class="qicon">O</span><span class="qname" title="${a.key}">${a.key}</span></div><div class="plan">套餐 <b>OpenCode Go</b></div>${renderUsage(a.usage||{})}</article>`;
-  }).join('')}</div><p>模型 ${data.modelCount||0} 个 · session 注入已开 · ${data.fetchedAt||''}</p>`;
+    const on=a.preferred||a.key===preferred;
+    return `<article class="qcard"><div class="qhead"><span class="qicon">O</span><span class="qname" title="${a.key}">${a.key}</span>${on?'<span class="badge">当前选用</span>':''}</div><div class="plan">套餐 <b>OpenCode Go</b></div>${renderUsage(a.usage||{})}</article>`;
+  }).join('')}</div><p>订阅池 ${data.pool&&data.pool.size||data.accounts.length} 个 · 按限额自动切换 · 模型 ${data.modelCount||0} 个 · ${data.fetchedAt||''}</p>`;
 }
 async function loadStatus(){
   if(window.__OPENCODE_STATUS__) applyStatus(window.__OPENCODE_STATUS__);
@@ -179,7 +312,7 @@ async function connect(){
       api_key:apiKey,
       include_claude:document.getElementById('claude').checked
     });
-    setMsg('已写入 '+data.provider+'，同步 '+data.models+' 个模型。正在刷新限额…', true);
+    setMsg('已加入订阅池，当前 '+(data.pool_size||1)+' 个 Key，同步 '+data.models+' 个模型。正在刷新限额…', true);
     window.__OPENCODE_STATUS__=null;
     location.reload();
   }catch(e){ setMsg(e.message,false); }

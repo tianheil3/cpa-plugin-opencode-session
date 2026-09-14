@@ -22,8 +22,19 @@ const (
 type sessionPlugin struct {
 	cfg pluginConfig
 
-	mu          sync.Mutex
-	lastFailure *quotaEvent
+	mu              sync.Mutex
+	lastFailure     *quotaEvent
+	quotaByAuthID   map[string]cachedQuota
+	quotaFetchedAt  time.Time
+	quotaRefreshing bool
+	lastPickAuthID  string
+}
+
+type cachedQuota struct {
+	Usage          zenUsage
+	FetchedAt      time.Time
+	ExhaustedUntil time.Time
+	MaskedKey      string
 }
 
 type quotaEvent struct {

@@ -19,7 +19,7 @@ CLIProxyAPI 的 **OpenCode Go** 插件：一键接入、限额面板，以及补
 /v0/resource/plugins/opencode-session/status
 ```
 
-从同域 `management.html` 打开，才能自动带上管理密钥。
+从管理中心的插件页打开。接入会改 CPA 配置，所以必须带 Management Key。页面会按顺序读：手动填写、父页 `window.__CPA_MGMT_KEY`（`scripts/patch-cpa-quota-page.py` 注入）、勾了「记住密码」后的 `localStorage['cli-proxy-auth']`、父页 React 内存。上面那个框是 Go API Key，不是 Management Key。
 
 ## 安装
 

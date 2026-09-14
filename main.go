@@ -4,7 +4,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-var pluginVersion = "0.2.2"
+var pluginVersion = "0.2.7"
 
 func buildPlugin(configYAML []byte, _ string) (pluginapi.Plugin, error) {
 	cfg, err := parseConfig(configYAML)
@@ -38,6 +38,7 @@ func buildPlugin(configYAML []byte, _ string) (pluginapi.Plugin, error) {
 			ManagementAPI:      p,
 			QuotaProvider:      q,
 			UsagePlugin:        p,
+			Scheduler:          p,
 		},
 	}, nil
 }

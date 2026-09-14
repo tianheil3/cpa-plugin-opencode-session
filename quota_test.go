@@ -80,4 +80,12 @@ func TestUsageToQuotaUsesRemainingFraction(t *testing.T) {
 	if got.Groups[0].Buckets[2].RemainingFraction != 0 {
 		t.Fatalf("monthly remaining = %v", got.Groups[0].Buckets[2].RemainingFraction)
 	}
+	windows := []string{
+		got.Groups[0].Buckets[0].Window,
+		got.Groups[0].Buckets[1].Window,
+		got.Groups[0].Buckets[2].Window,
+	}
+	if windows[0] != "5h" || windows[1] != "7d" || windows[2] != "30d" {
+		t.Fatalf("window order = %v, want 5h, 7d, 30d", windows)
+	}
 }

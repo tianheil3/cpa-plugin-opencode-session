@@ -14,6 +14,9 @@ func (p *sessionPlugin) RegisterManagement(_ context.Context, _ pluginapi.Manage
 	return pluginapi.ManagementRegistrationResponse{
 		Routes: []pluginapi.ManagementRoute{
 			{Method: http.MethodGet, Path: "/plugins/opencode-session/status", Handler: p},
+			{Method: http.MethodGet, Path: "/plugins/opencode-session/auth-files", Handler: p},
+			{Method: http.MethodPatch, Path: "/plugins/opencode-session/auth-files/status", Handler: p},
+			{Method: http.MethodDelete, Path: "/plugins/opencode-session/auth-files", Handler: p},
 			{Method: http.MethodPost, Path: "/plugins/opencode-session/connect", Handler: p},
 			{Method: http.MethodPost, Path: "/plugins/opencode-session/sync-models", Handler: p},
 			{Method: http.MethodPost, Path: "/plugins/opencode-session/refresh", Handler: p},
@@ -22,7 +25,7 @@ func (p *sessionPlugin) RegisterManagement(_ context.Context, _ pluginapi.Manage
 			{
 				Path:        "/status",
 				Menu:        "OpenCode Go",
-				Description: "Connect an OpenCode Go key, sync models, and watch 5h/weekly/monthly quota.",
+				Description: "Connect multiple OpenCode Go subscriptions; requests pick the key with the most remaining quota.",
 				Handler:     p,
 			},
 		},
@@ -36,6 +39,12 @@ func (p *sessionPlugin) HandleManagement(ctx context.Context, req pluginapi.Mana
 		return htmlResponse(p.dashboardPage(ctx)), nil
 	case req.Method == http.MethodGet && strings.HasSuffix(path, "/plugins/opencode-session/status"):
 		return p.handleStatus(ctx)
+	case req.Method == http.MethodGet && strings.HasSuffix(path, "/plugins/opencode-session/auth-files"):
+		return p.handleAuthFiles(ctx)
+	case (req.Method == http.MethodPatch || req.Method == http.MethodPost) && strings.HasSuffix(path, "/plugins/opencode-session/auth-files/status"):
+		return p.handleAuthFilesStatus(ctx, req.Body)
+	case req.Method == http.MethodDelete && strings.HasSuffix(path, "/plugins/opencode-session/auth-files"):
+		return p.handleAuthFilesDelete(ctx, req)
 	case req.Method == http.MethodPost && strings.HasSuffix(path, "/plugins/opencode-session/connect"):
 		return p.handleConnect(ctx, req.Body)
 	case req.Method == http.MethodPost && strings.HasSuffix(path, "/plugins/opencode-session/sync-models"):
@@ -83,18 +92,29 @@ func (p *sessionPlugin) handleConnect(ctx context.Context, body []byte) (plugina
 	if err != nil {
 		return jsonResponse(http.StatusBadGateway, map[string]any{"error": err.Error()}), nil
 	}
-	if _, err := fetchZenUsage(ctx, p.cfg.zenBaseURL(), apiKey); err != nil {
-		return jsonResponse(http.StatusBadGateway, map[string]any{"error": err.Error()}), nil
+	usage, errUsage := fetchZenUsage(ctx, p.cfg.zenBaseURL(), apiKey)
+	if errUsage != nil {
+		return jsonResponse(http.StatusBadGateway, map[string]any{"error": errUsage.Error()}), nil
 	}
 	path := resolveConfigPath(p.cfg.CPAConfigPath)
 	if err := upsertOpenCodeProvider(path, p.cfg.providerName(), p.cfg.zenBaseURL(), apiKey, models, includeClaude); err != nil {
 		return jsonResponse(http.StatusInternalServerError, map[string]any{"error": err.Error()}), nil
 	}
+	entries, _, _ := listConfiguredEntries(path, p.cfg.providerName())
+	authID := stableCompatAuthID(p.cfg.providerName(), apiKey, p.cfg.zenBaseURL(), "direct")
+	for _, entry := range entries {
+		if entry.APIKey == apiKey {
+			authID = entry.AuthID(p.cfg.providerName())
+			break
+		}
+	}
+	p.rememberUsage(authID, maskKey(apiKey), usage)
 	return jsonResponse(http.StatusOK, map[string]any{
 		"ok":            true,
 		"provider":      p.cfg.providerName(),
 		"models":        len(models),
 		"key":           maskKey(apiKey),
+		"pool_size":     len(entries),
 		"includeClaude": includeClaude,
 	}), nil
 }
@@ -134,21 +154,35 @@ func (p *sessionPlugin) handleStatus(ctx context.Context) (pluginapi.ManagementR
 
 func (p *sessionPlugin) statusPayload(ctx context.Context) (map[string]any, error) {
 	path := resolveConfigPath(p.cfg.CPAConfigPath)
-	keys, models, err := listConfiguredKeys(path, p.cfg.providerName())
+	entries, models, err := listConfiguredEntries(path, p.cfg.providerName())
 	if err != nil {
 		return nil, err
 	}
-	accounts := make([]map[string]any, 0, len(keys))
-	for _, key := range keys {
-		item := map[string]any{"key": maskKey(key)}
-		usage, errUsage := fetchZenUsage(ctx, p.cfg.zenBaseURL(), key)
+	accounts := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		masked := maskKey(entry.APIKey)
+		item := map[string]any{
+			"key":  masked,
+			"id":   entry.AuthID(p.cfg.providerName()),
+			"name": opencodeAuthFileName(entry, p.cfg.providerName()),
+		}
+		base := entry.BaseURL
+		if base == "" {
+			base = p.cfg.zenBaseURL()
+		}
+		usage, errUsage := fetchZenUsage(ctx, base, entry.APIKey)
 		if errUsage != nil {
 			item["error"] = errUsage.Error()
 		} else {
 			item["usage"] = usage
 			item["quota"] = usageToQuota(usage)
+			p.rememberUsage(entry.AuthID(p.cfg.providerName()), masked, usage)
 		}
 		accounts = append(accounts, item)
+	}
+	preferred := p.preferredMaskedKey(entries)
+	for _, item := range accounts {
+		item["preferred"] = item["key"] == preferred
 	}
 	p.mu.Lock()
 	failure := p.lastFailure
@@ -160,10 +194,15 @@ func (p *sessionPlugin) statusPayload(ctx context.Context) (map[string]any, erro
 		"models":     models,
 		"modelCount": len(models),
 		"accounts":   accounts,
-		"session":    true,
-		"version":    pluginVersion,
-		"failure":    failure,
-		"fetchedAt":  time.Now().UTC().Format(time.RFC3339),
+		"pool": map[string]any{
+			"size":      len(entries),
+			"preferred": preferred,
+			"strategy":  "quota",
+		},
+		"session":   true,
+		"version":   pluginVersion,
+		"failure":   failure,
+		"fetchedAt": time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 
@@ -171,7 +210,10 @@ func htmlResponse(body string) pluginapi.ManagementResponse {
 	return pluginapi.ManagementResponse{
 		StatusCode: http.StatusOK,
 		Headers: http.Header{
-			"Content-Type": {"text/html; charset=utf-8"},
+			"Content-Type":              {"text/html; charset=utf-8"},
+			"Cache-Control":             {"no-store, no-cache, must-revalidate"},
+			"Pragma":                    {"no-cache"},
+			"X-Opencode-Session-Plugin": {pluginVersion},
 		},
 		Body: []byte(body),
 	}
