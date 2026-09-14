@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,10 +61,18 @@ func (p *sessionPlugin) InterceptRequestAfterAuth(ctx context.Context, req plugi
 
 func (p *sessionPlugin) intercept(req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
 	resp := pluginapi.RequestInterceptResponse{}
+	if !p.shouldInjectSession(req) {
+		if strings.TrimSpace(req.ToFormat) != "" {
+			models, _ := p.openCodeInterceptTargets()
+			if modelInOpenCodeList(req.Model, req.RequestedModel, models) {
+				resp.ClearHeaders = []string{sessionHeader, "X-Opencode-Session"}
+			}
+		}
+		return resp, nil
+	}
 	sid := sessionIDFrom(req.Headers, req.Body, req.Metadata)
-	resp.Headers = make(http.Header, 2)
+	resp.Headers = make(http.Header, 1)
 	resp.Headers.Set(sessionHeader, sid)
-	resp.Headers.Set("Session-Id", sid)
 	model := req.Model
 	if model == "" {
 		model = req.RequestedModel

@@ -70,11 +70,13 @@ headers:
 
 ## Session rewrite
 
-On `request.intercept_before` / `request.intercept_after`:
+On `request.intercept_before` / `request.intercept_after`, and only for OpenCode Go credentials/models:
 
 1. Resolve a session id: existing `x-opencode-session` → Codex `Session-Id`/`Thread-Id` → Claude / DeepSeek Harness headers → `prompt_cache_key` → host `canonical_session_id` → UUID.
 2. Set execution header `x-opencode-session`.
 3. Optionally rewrite JSON (clamp `xhigh`, drop `json_schema`, flatten function tools).
+
+Other providers are left unchanged.
 
 ## Plugin config
 
@@ -98,7 +100,7 @@ Requires Go 1.26+ and CGO.
 
 ```bash
 make test
-make build VERSION=0.2.7
+make build VERSION=0.2.8
 ```
 
 ## License
