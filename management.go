@@ -20,6 +20,8 @@ func (p *sessionPlugin) RegisterManagement(_ context.Context, _ pluginapi.Manage
 			{Method: http.MethodPost, Path: "/plugins/opencode-session/connect", Handler: p},
 			{Method: http.MethodPost, Path: "/plugins/opencode-session/sync-models", Handler: p},
 			{Method: http.MethodPost, Path: "/plugins/opencode-session/refresh", Handler: p},
+			{Method: http.MethodPost, Path: "/plugins/opencode-session/tokens/reset", Handler: p},
+			{Method: http.MethodPatch, Path: "/plugins/opencode-session/proxy", Handler: p},
 		},
 		Resources: []pluginapi.ResourceRoute{
 			{
@@ -51,6 +53,10 @@ func (p *sessionPlugin) HandleManagement(ctx context.Context, req pluginapi.Mana
 		return p.handleSyncModels(ctx, req.Body)
 	case req.Method == http.MethodPost && strings.HasSuffix(path, "/plugins/opencode-session/refresh"):
 		return p.handleStatus(ctx)
+	case req.Method == http.MethodPost && strings.HasSuffix(path, "/plugins/opencode-session/tokens/reset"):
+		return p.handleTokensReset()
+	case req.Method == http.MethodPatch && strings.HasSuffix(path, "/plugins/opencode-session/proxy"):
+		return p.handleProxy(req.Body)
 	default:
 		if req.Method == http.MethodGet && (strings.HasSuffix(path, "/status") || strings.HasSuffix(path, "/")) {
 			return htmlResponse(p.dashboardPage(ctx)), nil
@@ -78,6 +84,11 @@ func (p *sessionPlugin) dashboardPage(ctx context.Context) string {
 type connectRequest struct {
 	APIKey        string `json:"api_key"`
 	IncludeClaude bool   `json:"include_claude"`
+	ProxyURL      string `json:"proxy_url"`
+}
+
+type proxyRequest struct {
+	ProxyURL string `json:"proxy_url"`
 }
 
 func (p *sessionPlugin) handleConnect(ctx context.Context, body []byte) (pluginapi.ManagementResponse, error) {
@@ -88,6 +99,14 @@ func (p *sessionPlugin) handleConnect(ctx context.Context, body []byte) (plugina
 		return jsonResponse(http.StatusBadRequest, map[string]any{"error": "api_key is required"}), nil
 	}
 	includeClaude := req.IncludeClaude || p.cfg.IncludeClaude
+	if strings.Contains(string(body), `"proxy_url"`) {
+		p.cfg.ProxyURL = strings.TrimSpace(req.ProxyURL)
+		if p.cfg.ProxyURL == "" {
+			p.cfg.ProxyURL = "direct"
+		}
+	}
+	path := resolveConfigPath(p.cfg.CPAConfigPath)
+	_ = persistPluginProxy(path, pluginID, p.cfg.proxyURL())
 	models, err := fetchZenModels(ctx, p.cfg.zenBaseURL(), apiKey)
 	if err != nil {
 		return jsonResponse(http.StatusBadGateway, map[string]any{"error": err.Error()}), nil
@@ -96,8 +115,7 @@ func (p *sessionPlugin) handleConnect(ctx context.Context, body []byte) (plugina
 	if errUsage != nil {
 		return jsonResponse(http.StatusBadGateway, map[string]any{"error": errUsage.Error()}), nil
 	}
-	path := resolveConfigPath(p.cfg.CPAConfigPath)
-	if err := upsertOpenCodeProvider(path, p.cfg.providerName(), p.cfg.zenBaseURL(), apiKey, models, includeClaude); err != nil {
+	if err := upsertOpenCodeProviderProxy(path, p.cfg.providerName(), p.cfg.zenBaseURL(), apiKey, models, includeClaude, p.cfg.proxyURL()); err != nil {
 		return jsonResponse(http.StatusInternalServerError, map[string]any{"error": err.Error()}), nil
 	}
 	entries, _, _ := listConfiguredEntries(path, p.cfg.providerName())
@@ -116,7 +134,25 @@ func (p *sessionPlugin) handleConnect(ctx context.Context, body []byte) (plugina
 		"key":           maskKey(apiKey),
 		"pool_size":     len(entries),
 		"includeClaude": includeClaude,
+		"proxy_url":     p.cfg.proxyURL(),
 	}), nil
+}
+
+func (p *sessionPlugin) handleProxy(body []byte) (pluginapi.ManagementResponse, error) {
+	var req proxyRequest
+	_ = json.Unmarshal(body, &req)
+	p.cfg.ProxyURL = strings.TrimSpace(req.ProxyURL)
+	if p.cfg.ProxyURL == "" {
+		p.cfg.ProxyURL = "direct"
+	}
+	path := resolveConfigPath(p.cfg.CPAConfigPath)
+	if err := persistPluginProxy(path, pluginID, p.cfg.ProxyURL); err != nil {
+		return jsonResponse(http.StatusInternalServerError, map[string]any{"error": err.Error()}), nil
+	}
+	if err := applyProxyToProvider(path, p.cfg.providerName(), p.cfg.ProxyURL); err != nil {
+		return jsonResponse(http.StatusInternalServerError, map[string]any{"error": err.Error()}), nil
+	}
+	return jsonResponse(http.StatusOK, map[string]any{"ok": true, "proxy_url": p.cfg.ProxyURL}), nil
 }
 
 func (p *sessionPlugin) handleSyncModels(ctx context.Context, body []byte) (pluginapi.ManagementResponse, error) {
@@ -178,6 +214,7 @@ func (p *sessionPlugin) statusPayload(ctx context.Context) (map[string]any, erro
 			item["quota"] = usageToQuota(usage)
 			p.rememberUsage(entry.AuthID(p.cfg.providerName()), masked, usage)
 		}
+		item["tokens"] = p.tokensForAuth(entry.AuthID(p.cfg.providerName()))
 		accounts = append(accounts, item)
 	}
 	preferred := p.preferredMaskedKey(entries)
@@ -199,11 +236,22 @@ func (p *sessionPlugin) statusPayload(ctx context.Context) (map[string]any, erro
 			"preferred": preferred,
 			"strategy":  "quota",
 		},
-		"session":   true,
+		"session":    true,
+		"proxy_url":  p.cfg.proxyURL(),
 		"version":   pluginVersion,
 		"failure":   failure,
+		"tokens":    p.tokensPayload(),
 		"fetchedAt": time.Now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func (p *sessionPlugin) handleTokensReset() (pluginapi.ManagementResponse, error) {
+	p.resetTokens()
+	return jsonResponse(http.StatusOK, map[string]any{
+		"ok":      true,
+		"tokens":  p.tokensPayload(),
+		"version": pluginVersion,
+	}), nil
 }
 
 func htmlResponse(body string) pluginapi.ManagementResponse {

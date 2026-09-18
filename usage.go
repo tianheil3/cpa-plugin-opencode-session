@@ -10,10 +10,17 @@ import (
 )
 
 func (p *sessionPlugin) HandleUsage(_ context.Context, record pluginapi.UsageRecord) {
-	if !record.Failed {
+	if !p.isOpenCodeUsage(record) {
 		return
 	}
-	if !looksLikeOpenCode(record.Provider, record.BaseURL, record.Model) {
+	authID := strings.TrimSpace(record.AuthID)
+	if authID == "" {
+		p.mu.Lock()
+		authID = p.lastPickAuthID
+		p.mu.Unlock()
+	}
+	if !record.Failed {
+		p.recordTokens(authID, record.Model, p.maskedKeyForAuth(authID), record.Detail)
 		return
 	}
 	quotaHit := record.Failure.StatusCode == http.StatusTooManyRequests || looksLikeQuotaBody(record.Failure.Body)
@@ -26,12 +33,6 @@ func (p *sessionPlugin) HandleUsage(_ context.Context, record pluginapi.UsageRec
 	}
 	p.mu.Unlock()
 	if quotaHit {
-		authID := strings.TrimSpace(record.AuthID)
-		if authID == "" {
-			p.mu.Lock()
-			authID = p.lastPickAuthID
-			p.mu.Unlock()
-		}
 		p.markExhausted(authID, time.Time{})
 	}
 }

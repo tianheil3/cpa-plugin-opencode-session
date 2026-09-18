@@ -37,6 +37,14 @@ button.secondary { background:#2a3340; color:var(--text); }
 .qrow.low .qbar > i { background: var(--bad); }
 .err { color: var(--bad); }
 .ok { color: var(--ok); }
+.stats { display:grid; gap:10px; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); }
+.stat { background:#0e1218; border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+.stat b { display:block; font-size:18px; color:var(--text); margin-top:2px; }
+.stat span { font-size:12px; color:var(--muted); }
+.muted { color:var(--muted); font-size:12px; }
+table.tok { width:100%; border-collapse:collapse; font-size:13px; }
+table.tok th, table.tok td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+table.tok th { color:var(--muted); font-weight:600; }
 </style>
 </head>
 <body>
@@ -58,6 +66,24 @@ button.secondary { background:#2a3340; color:var(--text); }
       <input id="mgmtKey" type="password" placeholder="Management Key（自动读取失败时再填）" autocomplete="off">
     </div>
     <p id="msg"></p>
+  </section>
+
+  <section class="panel">
+    <h2>访问代理</h2>
+    <p>请求 OpenCode Go 模型时使用。默认 <code>direct</code> 直连。可改成 <code>http://127.0.0.1:7890</code> 或 socks5。</p>
+    <div class="row">
+      <input id="proxyUrl" placeholder="direct / http://127.0.0.1:7890" autocomplete="off">
+      <button id="btnProxy" type="button">保存代理</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">本机累计 Token</h2>
+      <button id="btnResetTokens" class="secondary" type="button">清零</button>
+    </div>
+    <p class="muted">从本机插件记账的成功请求，含输入 / 输出 / 缓存命中。官方 <code>/usage</code> 只有剩余百分比，没有绝对 token 数。重启 CPA 会从磁盘接着累加。</p>
+    <div id="tokens">加载中…</div>
   </section>
 
   <section>
@@ -263,6 +289,34 @@ function remainingOf(w){
   return Math.max(0, Math.min(100, 100-used));
 }
 function rowClass(remain){ if(remain>=70) return ''; if(remain>=30) return 'mid'; return 'low'; }
+function tokenLine(t){
+  if(!t) return '';
+  const hit=t.cache_hit_display||'—';
+  const n=t.total_display||'0';
+  const req=t.requests||0;
+  if(!req && !(t.total_tokens>0)) return '<p class="muted">还没有统计到成功请求。</p>';
+  return `<p class="muted">累计 ${n} token · 缓存命中 ${hit} · ${req} 次成功请求</p>`;
+}
+function renderTokens(t){
+  const el=document.getElementById('tokens');
+  if(!t){ el.innerHTML='<p class="muted">暂无统计。</p>'; return; }
+  const req=t.requests||0;
+  if(!req && !(t.total_tokens>0)){
+    el.innerHTML='<p class="muted">还没有统计到成功请求。走 OpenCode Go 渠道的成功调用会计入这里。</p>';
+    return;
+  }
+  const models=(t.by_model||[]).slice(0,8).map(m=>`<tr><td>${m.model||''}</td><td>${m.total_display||0}</td><td>${m.cache_hit_display||'—'}</td><td>${m.requests||0}</td></tr>`).join('');
+  el.innerHTML=`<div class="stats">
+    <div class="stat"><span>合计</span><b>${t.total_display||0}</b></div>
+    <div class="stat"><span>输入</span><b>${t.input_display||0}</b></div>
+    <div class="stat"><span>输出</span><b>${t.output_display||0}</b></div>
+    <div class="stat"><span>缓存读取</span><b>${t.cache_read_display||0}</b></div>
+    <div class="stat"><span>缓存写入</span><b>${t.cache_write_display||0}</b></div>
+    <div class="stat"><span>缓存命中</span><b>${t.cache_hit_display||'—'}</b></div>
+  </div>
+  <p class="muted" style="margin:10px 0 8px">成功请求 ${req} 次${t.reasoning_tokens?(' · 推理 '+ (t.reasoning_tokens>=10000?((t.reasoning_tokens/1e4).toFixed(2)+' 万'):t.reasoning_tokens)):''} · 起算 ${t.started_at||''}</p>
+  ${models?`<table class="tok"><thead><tr><th>模型</th><th>累计</th><th>命中</th><th>次数</th></tr></thead><tbody>${models}</tbody></table>`:''}`;
+}
 function renderUsage(u){
   const rows=[['5 小时限额',u.rolling],['周限额',u.weekly],['月限额',u.monthly]];
   return rows.map(([name,w])=>{
@@ -271,7 +325,10 @@ function renderUsage(u){
   }).join('');
 }
 function applyStatus(data){
+  const proxy=document.getElementById('proxyUrl');
+  if(proxy && data && data.proxy_url!=null && !proxy.value) proxy.value=data.proxy_url||'direct';
   const box=document.getElementById('quota');
+  renderTokens(data&&data.tokens);
   if(!data||data.ok===false){
     box.innerHTML=`<p class="err">${(data&&data.error)||'无法读取限额'}</p>`;
     return;
@@ -284,7 +341,7 @@ function applyStatus(data){
   box.innerHTML=`<div class="grid">${data.accounts.map(a=>{
     if(a.error) return `<article class="qcard"><p class="err">${a.key}: ${a.error}</p></article>`;
     const on=a.preferred||a.key===preferred;
-    return `<article class="qcard"><div class="qhead"><span class="qicon">O</span><span class="qname" title="${a.key}">${a.key}</span>${on?'<span class="badge">当前选用</span>':''}</div><div class="plan">套餐 <b>OpenCode Go</b></div>${renderUsage(a.usage||{})}</article>`;
+    return `<article class="qcard"><div class="qhead"><span class="qicon">O</span><span class="qname" title="${a.key}">${a.key}</span>${on?'<span class="badge">当前选用</span>':''}</div><div class="plan">套餐 <b>OpenCode Go</b></div>${tokenLine(a.tokens)}${renderUsage(a.usage||{})}</article>`;
   }).join('')}</div><p>订阅池 ${data.pool&&data.pool.size||data.accounts.length} 个 · 按限额自动切换 · 模型 ${data.modelCount||0} 个 · ${data.fetchedAt||''}</p>`;
 }
 async function loadStatus(){
@@ -310,7 +367,8 @@ async function connect(){
     if(!findKey()){ setMsg(friendlyError('missing management key', 401), false); return; }
     const data=await api('POST','/v0/management/plugins/opencode-session/connect',{
       api_key:apiKey,
-      include_claude:document.getElementById('claude').checked
+      include_claude:document.getElementById('claude').checked,
+      proxy_url:document.getElementById('proxyUrl').value.trim()||'direct'
     });
     setMsg('已加入订阅池，当前 '+(data.pool_size||1)+' 个 Key，同步 '+data.models+' 个模型。正在刷新限额…', true);
     window.__OPENCODE_STATUS__=null;
@@ -328,9 +386,32 @@ async function syncModels(){
     location.reload();
   }catch(e){ setMsg(e.message,false); }
 }
+async function resetTokens(){
+  if(!findKey()){ setMsg(friendlyError('missing management key', 401), false); return; }
+  if(!confirm('清零本机累计 Token？不影响官方额度窗口。')) return;
+  try{
+    await api('POST','/v0/management/plugins/opencode-session/tokens/reset',{});
+    setMsg('本机累计已清零。', true);
+    window.__OPENCODE_STATUS__=null;
+    location.reload();
+  }catch(e){ setMsg(e.message,false); }
+}
+async function saveProxy(){
+  try{
+    if(!findKey()){ setMsg(friendlyError('missing management key', 401), false); return; }
+    const data=await api('PATCH','/v0/management/plugins/opencode-session/proxy',{
+      proxy_url:document.getElementById('proxyUrl').value.trim()||'direct'
+    });
+    setMsg('已保存代理：'+(data.proxy_url||'direct'), true);
+    window.__OPENCODE_STATUS__=null;
+    location.reload();
+  }catch(e){ setMsg(e.message,false); }
+}
 document.getElementById('btnConnect').onclick=connect;
 document.getElementById('btnSync').onclick=syncModels;
 document.getElementById('btnRefresh').onclick=()=>{ window.__OPENCODE_STATUS__=null; location.reload(); };
+document.getElementById('btnResetTokens').onclick=resetTokens;
+document.getElementById('btnProxy').onclick=saveProxy;
 loadStatus();
 </script>
 </body>

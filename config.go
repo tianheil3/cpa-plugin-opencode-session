@@ -17,6 +17,7 @@ type pluginConfig struct {
 	CPAConfigPath  string   `yaml:"cpa_config_path"`
 	ProviderName   string   `yaml:"provider_name"`
 	BaseURL        string   `yaml:"base_url"`
+	ProxyURL       string   `yaml:"proxy_url"`
 	IncludeClaude  bool     `yaml:"include_claude"`
 }
 
@@ -29,6 +30,7 @@ func defaultConfig() pluginConfig {
 		CPAConfigPath:  "config.yaml",
 		ProviderName:   "opencode-go",
 		BaseURL:        defaultZenBaseURL,
+		ProxyURL:       "direct",
 	}
 }
 
@@ -50,6 +52,10 @@ func parseConfig(raw []byte) (pluginConfig, error) {
 		cfg.BaseURL = defaultZenBaseURL
 	}
 	return cfg, nil
+}
+
+func (c pluginConfig) proxyURL() string {
+	return strings.TrimSpace(c.ProxyURL)
 }
 
 func (c pluginConfig) providerName() string {

@@ -11,6 +11,10 @@ import (
 )
 
 func upsertOpenCodeProvider(configPath, providerName, baseURL, apiKey string, models []string, includeClaude bool) error {
+	return upsertOpenCodeProviderProxy(configPath, providerName, baseURL, apiKey, models, includeClaude, "direct")
+}
+
+func upsertOpenCodeProviderProxy(configPath, providerName, baseURL, apiKey string, models []string, includeClaude bool, proxyURL string) error {
 	if strings.TrimSpace(configPath) == "" {
 		configPath = "config.yaml"
 	}
@@ -26,11 +30,11 @@ func upsertOpenCodeProvider(configPath, providerName, baseURL, apiKey string, mo
 	if doc == nil {
 		return fmt.Errorf("config.yaml root is not a mapping")
 	}
-	if err := upsertCompatProvider(doc, providerName, baseURL, apiKey, models); err != nil {
+	if err := upsertCompatProvider(doc, providerName, baseURL, apiKey, models, proxyURL); err != nil {
 		return err
 	}
 	if includeClaude {
-		if err := upsertClaudeKey(doc, apiKey); err != nil {
+		if err := upsertClaudeKey(doc, apiKey, proxyURL); err != nil {
 			return err
 		}
 	}
@@ -120,7 +124,7 @@ func intNode(v int) *yaml.Node {
 	return n
 }
 
-func upsertCompatProvider(doc *yaml.Node, providerName, baseURL, apiKey string, models []string) error {
+func upsertCompatProvider(doc *yaml.Node, providerName, baseURL, apiKey string, models []string, proxyURL string) error {
 	seq := mappingGet(doc, "openai-compatibility")
 	if seq == nil || seq.Kind != yaml.SequenceNode {
 		seq = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
@@ -148,22 +152,25 @@ func upsertCompatProvider(doc *yaml.Node, providerName, baseURL, apiKey string, 
 		mappingSet(target, "headers", headers)
 	}
 	mappingSet(headers, "x-opencode-session", scalarNode("$x-opencode-session"))
-	upsertAPIKeyEntry(target, apiKey)
+	upsertAPIKeyEntry(target, apiKey, proxyURL)
 	if len(models) > 0 {
 		mappingSet(target, "models", modelsSeq(models))
 	}
 	return nil
 }
 
-func upsertAPIKeyEntry(provider *yaml.Node, apiKey string) {
+func upsertAPIKeyEntry(provider *yaml.Node, apiKey, proxyURL string) {
 	seq := mappingGet(provider, "api-key-entries")
 	if seq == nil || seq.Kind != yaml.SequenceNode {
 		seq = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
 		mappingSet(provider, "api-key-entries", seq)
 	}
+	if strings.TrimSpace(proxyURL) == "" {
+		proxyURL = "direct"
+	}
 	for _, item := range seq.Content {
 		if mappingGetString(item, "api-key") == apiKey {
-			mappingSet(item, "proxy-url", scalarNode("direct"))
+			mappingSet(item, "proxy-url", scalarNode(proxyURL))
 			mappingSet(item, "disabled", boolNode(false))
 			mappingDelete(item, "weight")
 			return
@@ -171,11 +178,14 @@ func upsertAPIKeyEntry(provider *yaml.Node, apiKey string) {
 	}
 	entry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	mappingSet(entry, "api-key", scalarNode(apiKey))
-	mappingSet(entry, "proxy-url", scalarNode("direct"))
+	mappingSet(entry, "proxy-url", scalarNode(proxyURL))
 	seq.Content = append(seq.Content, entry)
 }
 
-func upsertClaudeKey(doc *yaml.Node, apiKey string) error {
+func upsertClaudeKey(doc *yaml.Node, apiKey, proxyURL string) error {
+	if strings.TrimSpace(proxyURL) == "" {
+		proxyURL = "direct"
+	}
 	seq := mappingGet(doc, "claude-api-key")
 	if seq == nil || seq.Kind != yaml.SequenceNode {
 		seq = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
@@ -184,7 +194,7 @@ func upsertClaudeKey(doc *yaml.Node, apiKey string) error {
 	for _, item := range seq.Content {
 		if mappingGetString(item, "api-key") == apiKey {
 			mappingSet(item, "base-url", scalarNode(defaultClaudeURL))
-			mappingSet(item, "proxy-url", scalarNode("direct"))
+			mappingSet(item, "proxy-url", scalarNode(proxyURL))
 			headers := mappingGet(item, "headers")
 			if headers == nil || headers.Kind != yaml.MappingNode {
 				headers = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
@@ -197,7 +207,7 @@ func upsertClaudeKey(doc *yaml.Node, apiKey string) error {
 	entry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	mappingSet(entry, "api-key", scalarNode(apiKey))
 	mappingSet(entry, "base-url", scalarNode(defaultClaudeURL))
-	mappingSet(entry, "proxy-url", scalarNode("direct"))
+	mappingSet(entry, "proxy-url", scalarNode(proxyURL))
 	headers := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	mappingSet(headers, "x-opencode-session", scalarNode("$x-opencode-session"))
 	mappingSet(entry, "headers", headers)
@@ -517,4 +527,77 @@ func deleteConfiguredEntries(configPath, providerName string, names []string) (d
 		return nil, nil, err
 	}
 	return deleted, failed, nil
+}
+
+func persistPluginProxy(configPath, pluginID, proxyURL string) error {
+	if strings.TrimSpace(configPath) == "" {
+		configPath = "config.yaml"
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return err
+	}
+	doc := mappingNode(&root)
+	if doc == nil {
+		return fmt.Errorf("config.yaml root is not a mapping")
+	}
+	plugins := mappingGet(doc, "plugins")
+	if plugins == nil || plugins.Kind != yaml.MappingNode {
+		plugins = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		mappingSet(doc, "plugins", plugins)
+	}
+	configs := mappingGet(plugins, "configs")
+	if configs == nil || configs.Kind != yaml.MappingNode {
+		configs = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		mappingSet(plugins, "configs", configs)
+	}
+	item := mappingGet(configs, pluginID)
+	if item == nil || item.Kind != yaml.MappingNode {
+		item = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		mappingSet(configs, pluginID, item)
+	}
+	mappingSet(item, "enabled", boolNode(true))
+	mappingSet(item, "proxy_url", scalarNode(strings.TrimSpace(proxyURL)))
+	return persistYAML(configPath, raw, &root)
+}
+
+func applyProxyToProvider(configPath, providerName, proxyURL string) error {
+	if strings.TrimSpace(configPath) == "" {
+		configPath = "config.yaml"
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return err
+	}
+	doc := mappingNode(&root)
+	if doc == nil {
+		return fmt.Errorf("config.yaml root is not a mapping")
+	}
+	seq := mappingGet(doc, "openai-compatibility")
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return nil
+	}
+	if strings.TrimSpace(proxyURL) == "" {
+		proxyURL = "direct"
+	}
+	for _, item := range seq.Content {
+		if mappingGetString(item, "name") != providerName {
+			continue
+		}
+		keys := mappingGet(item, "api-key-entries")
+		if keys != nil && keys.Kind == yaml.SequenceNode {
+			for _, entry := range keys.Content {
+				mappingSet(entry, "proxy-url", scalarNode(proxyURL))
+			}
+		}
+	}
+	return persistYAML(configPath, raw, &root)
 }

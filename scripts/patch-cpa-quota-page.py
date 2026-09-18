@@ -15,9 +15,14 @@ from pathlib import Path
 
 MARKER = "opencode-go"
 SHARE_MARK = "data-opencode-auth-share"
+TOKEN_MARK = "data-opencode-token-panel"
 SHARE_SCRIPT = """  <script data-opencode-auth-share="1">
 (function(){if(window.__cpaShareAuth)return;window.__cpaShareAuth=1;function share(k){k=String(k||"").replace(/^Bearer\\s+/i,"").trim();if(!k)return;window.__CPA_MGMT_KEY=k;try{sessionStorage.setItem("cpa:managementKey",k)}catch(e){}try{document.querySelectorAll("iframe").forEach(function(f){try{f.contentWindow.postMessage({type:"cpa-management-key",key:k},"*")}catch(e){}})}catch(e){}}var p=XMLHttpRequest.prototype,s=p.setRequestHeader;p.setRequestHeader=function(n,v){try{if(/^authorization$/i.test(String(n))&&/bearer\\s+/i.test(String(v)))share(v);if(/^x-management-key$/i.test(String(n)))share(v)}catch(e){}return s.apply(this,arguments)};var f=window.fetch;if(typeof f==="function"){window.fetch=function(){try{var i=arguments[1]||{},h=i.headers;if(h){var g=function(k){return typeof h.get==="function"?h.get(k):(h[k]||h[k.toLowerCase()])};var a=g("Authorization")||g("X-Management-Key");if(a)share(a)}}catch(e){}return f.apply(this,arguments)}}}
 )();
+</script>
+"""
+TOKEN_SCRIPT = """  <script data-opencode-token-panel="1">
+(function(){if(window.__cpaOcTokens)return;window.__cpaOcTokens=1;var cache=null,fetched=0,timer=null;function key(){try{if(window.__CPA_MGMT_KEY)return String(window.__CPA_MGMT_KEY)}catch(e){}try{return sessionStorage.getItem("cpa:managementKey")||""}catch(e){}return ""}function fmt(n){n=Number(n)||0;if(n>=1e8)return(n/1e8).toFixed(2)+" 亿";if(n>=1e4)return(n/1e4).toFixed(2)+" 万";return String(Math.round(n))}function rate(t){if(t&&t.cache_hit_display)return t.cache_hit_display;var i=Number(t&&t.input_tokens||0),c=Number(t&&t.cache_read_tokens||0);if(c>i)i=i+c+Number(t&&t.cache_write_tokens||0);if(i<=0)return"—";return(Math.min(100,c/i*100)).toFixed(1)+"%"}function box(t){if(!t)return"";var sig=String((t.total_tokens||0)+":"+(t.requests||0)+":"+(t.updated_at||""));return '<div data-opencode-token-box="1" data-sig="'+sig+'" style="margin:12px 0 16px;padding:12px 14px;border:1px solid var(--border-color,#d5d2cb);border-radius:12px;background:var(--bg-secondary,#faf9f5);font-size:13px;line-height:1.55"><div style="font-weight:700;margin-bottom:6px">本机累计 Token（OpenCode Go）</div><div>合计 <b>'+fmt(t.total_tokens)+'</b> · 输入 '+fmt(t.input_tokens)+' · 输出 '+fmt(t.output_tokens)+(t.reasoning_tokens?(" · 推理 "+fmt(t.reasoning_tokens)):"")+'</div><div>缓存读取 '+fmt(t.cache_read_tokens)+' · 缓存写入 '+fmt(t.cache_write_tokens)+' · 命中率 <b>'+rate(t)+'</b> · 成功请求 '+(t.requests||0)+'</div><div style="opacity:.72;margin-top:4px">从本机插件记账，不是官方账单。官方额度窗口仍是剩余百分比。</div></div>'}async function load(){var k=key();if(!k)return null;try{var r=await fetch("/v0/management/plugins/opencode-session/status",{headers:{Authorization:"Bearer "+k,"X-Management-Key":k},credentials:"same-origin"});if(!r.ok)return null;var d=await r.json();return d&&d.tokens||null}catch(e){return null}}function findHost(){var nodes=document.querySelectorAll("h1,h2,h3,h4");for(var i=0;i<nodes.length;i++){var t=(nodes[i].textContent||"").trim();if(/OpenCode Go/.test(t)&&(/额度|配額|Quota|Квота/.test(t)))return nodes[i]}return null}async function paint(){if(!/#\\/?quota/i.test(location.hash||"")){var old=document.querySelector("[data-opencode-token-box]");if(old)old.remove();return}var host=findHost();if(!host)return;var now=Date.now();if(!cache||now-fetched>8000){fetched=now;cache=await load()}if(!cache)return;var html=box(cache);var prev=document.querySelector("[data-opencode-token-box]");var sig=String((cache.total_tokens||0)+":"+(cache.requests||0)+":"+(cache.updated_at||""));if(prev&&prev.getAttribute("data-sig")===sig)return;if(prev){prev.outerHTML=html;return}var wrap=document.createElement("div");wrap.innerHTML=html;host.parentNode.insertBefore(wrap.firstChild,host.nextSibling)}function schedule(){clearTimeout(timer);timer=setTimeout(paint,250)}addEventListener("hashchange",schedule);var mo=new MutationObserver(schedule);mo.observe(document.documentElement,{childList:true,subtree:true});schedule();})();
 </script>
 """
 
@@ -243,6 +248,14 @@ def inject_auth_share(html: str) -> str:
     return html.replace("<head>", "<head>\n" + SHARE_SCRIPT, 1)
 
 
+def inject_token_panel(html: str) -> str:
+    if TOKEN_MARK in html:
+        return html
+    if "<head>" not in html:
+        raise SystemExit("missing <head>")
+    return html.replace("<head>", "<head>\n" + TOKEN_SCRIPT, 1)
+
+
 def collapse_repeated(html: str, token: str) -> str:
     doubled = token + token
     while doubled in html:
@@ -327,11 +340,14 @@ def finalize(html: str) -> str:
         raise SystemExit("fetchQuota 5h/7d/30d reorder missing")
     if "||S===`opencode-go`||S===`opencode-go`" in html:
         raise SystemExit("duplicated opencode-go models condition")
+    if TOKEN_MARK not in html:
+        raise SystemExit("token panel script missing")
     return html
 
 
 def patch(html: str) -> str:
     html = inject_auth_share(html)
+    html = inject_token_panel(html)
     adapter_done = (
         "storeSetter:`setOpencodeGoQuota`" in html
         and "Yj=[`claude`,`antigravity`,`codex`,`xai`,`kimi`,`opencode-go`]" in html

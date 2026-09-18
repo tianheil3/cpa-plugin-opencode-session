@@ -27,7 +27,8 @@ python3 scripts/patch-cpa-quota-page.py /opt/cliproxy-api/static/management.html
 ```
 
 Set `disable-auto-update-panel` first. CPA otherwise re-downloads `management.html` on boot and wipes the patch. Re-run the script after a CPA upgrade.
-3. **Session 注入** — maps Codex `Session-Id` / Claude / DeepSeek Harness headers onto `x-opencode-session`, and rewrites Codex-style JSON (`xhigh`, `json_schema`, `namespace` tools).
+3. **Session 注入** — maps Codex `Session-Id` / Claude / DeepSeek Harness headers onto `x-opencode-session`, and rewrites Codex-style JSON (`xhigh`, `json_schema`, `namespace` tools). Other providers are left unchanged.
+4. **Local token totals** — successful OpenCode Go requests accumulate input / output / cache-read / cache-write. The plugin page and quota page show counts (including 亿) and cache hit rate. Stored next to CPA config as `opencode-session-tokens.json`; this is not the official bill.
 
 Management UI (after enable):
 
@@ -39,13 +40,14 @@ Authenticated APIs (management key):
 
 | Route | Purpose |
 |---|---|
-| `GET /v0/management/plugins/opencode-session/status` | Masked keys, quota windows, model list |
+| `GET /v0/management/plugins/opencode-session/status` | Masked keys, quota windows, model list, local token totals |
 | `GET /v0/management/plugins/opencode-session/auth-files` | Synthetic Auth Files cards for openai-compat keys |
 | `PATCH /v0/management/plugins/opencode-session/auth-files/status` | `{ "name": "opencode-go-…", "disabled": true }` |
 | `DELETE /v0/management/plugins/opencode-session/auth-files` | `{ "names": ["opencode-go-…"] }` |
 | `POST /v0/management/plugins/opencode-session/connect` | `{ "api_key": "sk-...", "include_claude": false }` |
 | `POST /v0/management/plugins/opencode-session/sync-models` | Refresh the model list from Zen |
 | `POST /v0/management/plugins/opencode-session/refresh` | Same as status |
+| `POST /v0/management/plugins/opencode-session/tokens/reset` | Clear local token totals |
 
 Open the page from the Management Center plugin iframe. Connect writes CPA config, so the page must send the Management Key. It reads, in order: the typed field, `window.parent.__CPA_MGMT_KEY` (set by `scripts/patch-cpa-quota-page.py`), encrypted `localStorage['cli-proxy-auth']` when **记住密码** is on, then the parent React store. A Go API Key in the top box is not a Management Key.
 
@@ -100,7 +102,7 @@ Requires Go 1.26+ and CGO.
 
 ```bash
 make test
-make build VERSION=0.2.8
+make build VERSION=0.2.9
 ```
 
 ## License

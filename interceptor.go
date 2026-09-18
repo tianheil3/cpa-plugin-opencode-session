@@ -29,6 +29,10 @@ type sessionPlugin struct {
 	quotaFetchedAt  time.Time
 	quotaRefreshing bool
 	lastPickAuthID  string
+	tokens          tokenStore
+	tokensLoaded    bool
+	tokensDirty     bool
+	persistTimer    *time.Timer
 }
 
 type cachedQuota struct {

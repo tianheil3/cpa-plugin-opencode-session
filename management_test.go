@@ -69,6 +69,12 @@ func TestHandleManagementResourceHTML(t *testing.T) {
 	if !strings.Contains(body, "订阅池") || !strings.Contains(body, "OpenCode Go") {
 		t.Fatalf("html = %s", body)
 	}
+	if !strings.Contains(body, "本机累计 Token") {
+		t.Fatal("dashboard must show local token totals")
+	}
+	if !strings.Contains(body, "/plugins/opencode-session/tokens/reset") {
+		t.Fatal("dashboard must expose token reset")
+	}
 	if !strings.Contains(body, `window.__OPENCODE_STATUS__ = {`) {
 		t.Fatal("expected embedded status JSON")
 	}
