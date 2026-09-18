@@ -10,3 +10,4 @@ checksums.txt
 *.iml
 *.log
 *.tmp
+__pycache__/
